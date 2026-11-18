@@ -1,0 +1,28 @@
+# Dependencies and generated Expo artifacts
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Python environments and caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local logs and credentials
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+
+# OS metadata
+.DS_Store
+Thumbs.db
