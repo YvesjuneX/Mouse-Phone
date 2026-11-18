@@ -1,0 +1,16 @@
+
+> remote-mouse-mobile@0.1.0 start
+> expo start --lan
+
+Starting project at C:\Users\juanl\Desktop\RemoteMouse\mobile-app
+Starting Metro Bundler
+
+TypeScript: The tsconfig.json has been updated (Use EXPO_NO_TYPESCRIPT_SETUP to skip)
+
+› Required modifications made to the tsconfig.json:
+
+  extends is now expo/tsconfig.base
+
+
+Waiting on http://localhost:8081
+Logs for your project will appear below.

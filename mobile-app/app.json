@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Remote Mouse",
+    "slug": "remote-mouse",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": { "package": "com.example.remotemouse" },
+    "ios": { "bundleIdentifier": "com.example.remotemouse" }
+  }
+}
