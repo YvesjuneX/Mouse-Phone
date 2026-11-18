@@ -1,5 +1,23 @@
 # Remote Mouse: guía rápida de prueba
 
+## Mando y movimiento (actualización)
+
+La carpeta actual del proyecto es `C:\Users\juanl\Desktop\Mouse Phone`.
+Reinicia `python server.py` en `desktop-app` y recarga Expo Go tras iniciar
+`npm.cmd start -- --lan --clear` en `mobile-app`.
+
+El cursor interpola el destino en intervalos previstos de 1/120 s con un seguimiento
+de 8 ms. Conserva fracciones, respeta los bordes y cede al ratón físico. La cadencia
+real depende del planificador de Windows y de la red.
+
+El mando ofrece tres modos de reproducción: **Vídeo** envía espacio, **YouTube**
+envía K y **Sistema** envía la tecla multimedia de Windows. En los dos primeros,
+haz clic en el reproductor antes de usarlo. No se muestra un estado ficticio de
+reproducción: el botón central siempre permite reproducir/pausar. −5/+5 siguen
+enviando las flechas, y su efecto depende del reproductor.
+
+Scroll aumentado un 25 %. Solo queda navegación superior en el panel táctil.
+
 El ordenador y el móvil deben estar conectados a la misma red Wi-Fi. La primera configuración requiere Internet para descargar paquetes de Expo.
 
 ## 1. Iniciar el servidor del ordenador (Windows)

@@ -1,5 +1,7 @@
 """Servidor local para el prototipo Remote Mouse."""
 import asyncio
+import ctypes
+from ctypes import wintypes
 import json
 import math
 import socket
@@ -8,9 +10,32 @@ import time
 
 import pyautogui
 import websockets
+from motion import Motion
 
 PORT = 8765
 SENSITIVITY = 1.35
+user32 = ctypes.windll.user32
+
+
+def read_cursor():
+    point = wintypes.POINT()
+    if not user32.GetCursorPos(ctypes.byref(point)):
+        raise OSError("GetCursorPos failed")
+    return point.x, point.y
+
+
+def write_cursor(x, y):
+    if not user32.SetCursorPos(x, y):
+        raise OSError("SetCursorPos failed")
+
+
+async def animate(motion):
+    previous = time.perf_counter()
+    while True:
+        await asyncio.sleep(1 / 120)
+        now = time.perf_counter()
+        motion.tick(now - previous)
+        previous = now
 
 
 def local_ip() -> str:
@@ -50,7 +75,9 @@ def stop_previous_server() -> None:
 
 
 async def handle_client(websocket):
-    remainder_x = remainder_y = 0.0
+    left, top = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    motion = Motion(read_cursor, write_cursor, (left, top, left + user32.GetSystemMetrics(78) - 1, top + user32.GetSystemMetrics(79) - 1))
+    animation = asyncio.create_task(animate(motion))
     print(f"Móvil conectado: {websocket.remote_address}")
     await websocket.send(json.dumps({"type": "remote_mouse", "version": 2}))
     try:
@@ -61,20 +88,19 @@ async def handle_client(websocket):
                     dx, dy = float(message["dx"]), float(message["dy"])
                     if not (math.isfinite(dx) and math.isfinite(dy)):
                         continue
-                    remainder_x += dx * SENSITIVITY
-                    remainder_y += dy * SENSITIVITY
-                    x, y = math.trunc(remainder_x), math.trunc(remainder_y)
-                    remainder_x -= x
-                    remainder_y -= y
-                    if x or y:
-                        pyautogui.moveRel(x, y, duration=0, _pause=False)
+                    motion.add(dx * SENSITIVITY, dy * SENSITIVITY)
+                elif message["type"] == "move_end":
+                    motion.tick(0, finish=True)
                 elif message["type"] == "click":
+                    motion.tick(0, finish=True)
                     pyautogui.click(button=message.get("button", "left"))
                 elif message["type"] == "scroll":
                     pyautogui.scroll(int(message.get("amount", 0)))
                 elif message["type"] == "media":
                     actions = {
                         "play_pause": "playpause",
+                        "play_pause_video": "space",
+                        "play_pause_youtube": "k",
                         "next": "nexttrack",
                         "previous": "prevtrack",
                         "volume_up": "volumeup",
@@ -84,15 +110,21 @@ async def handle_client(websocket):
                     }
                     key = actions.get(message.get("action"))
                     if key:
-                        pyautogui.press(key)
+                        pyautogui.keyDown(key, _pause=False)
+                        try:
+                            await asyncio.sleep(.04)
+                        finally:
+                            pyautogui.keyUp(key, _pause=False)
             except pyautogui.FailSafeException:
-                remainder_x = remainder_y = 0.0
+                motion.reset()
                 print("Protección de esquina activa: aparta el cursor con el ratón físico.")
             except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
                 print(f"Mensaje ignorado: {error}")
     except websockets.ConnectionClosed:
         pass
     finally:
+        animation.cancel()
+        await asyncio.gather(animation, return_exceptions=True)
         print("Móvil desconectado")
 
 
@@ -102,7 +134,7 @@ async def main():
     print("Remote Mouse listo")
     print(f"Introduce esta IP en el móvil: {ip}")
     print(f"Escuchando en ws://0.0.0.0:{PORT}")
-    async with websockets.serve(handle_client, "0.0.0.0", PORT):
+    async with websockets.serve(handle_client, "0.0.0.0", PORT, compression=None):
         await asyncio.Future()
 
 

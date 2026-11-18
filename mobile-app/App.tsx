@@ -1,7 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import * as Network from "expo-network";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Alert, Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Alert, Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { useEffect, useRef, useState } from "react";
 
 type SavedComputer = { name: string; ip: string };
@@ -9,6 +9,8 @@ type ConnectionState = "desconectado" | "conectando" | "conectado" | "error";
 const STORAGE_KEY = "@remote-mouse/computers";
 
 export default function App() {
+  const compact = useWindowDimensions().height < 760;
+  const [playMode, setPlayMode] = useState<"video" | "youtube" | "system">("video");
   const [host, setHost] = useState("");
   const [name, setName] = useState("");
   const [computers, setComputers] = useState<SavedComputer[]>([]);
@@ -157,10 +159,11 @@ export default function App() {
       lastPosition.current = current;
     },
     onPanResponderRelease: (_, gesture) => {
+      send({ type: "move_end" });
       if (Math.abs(gesture.dx) < 6 && Math.abs(gesture.dy) < 6) send({ type: "click", button: "left" });
       lastPosition.current = null;
     },
-    onPanResponderTerminate: () => { lastPosition.current = null; },
+    onPanResponderTerminate: () => { send({ type: "move_end" }); lastPosition.current = null; },
   })).current;
 
   const wheelResponder = useRef(PanResponder.create({
@@ -172,25 +175,34 @@ export default function App() {
       const steps = Math.trunc(delta / 3);
       if (steps) {
         lastWheelY.current += steps * 3;
-        send({ type: "scroll", amount: -steps * 8 });
+        send({ type: "scroll", amount: -steps * 10 });
       }
     },
   })).current;
 
   const media = (action: string) => send({ type: "media", action });
-  const mediaButton = (label: string, action: () => void, extra = {}) => <TouchableOpacity style={[styles.mediaButton, extra]} onPress={action}><Text style={styles.mediaText}>{label}</Text></TouchableOpacity>;
+  const mediaButton = (label: string, action: () => void, extra = {}, accessibilityLabel = label) => <TouchableOpacity accessibilityRole="button" accessibilityLabel={accessibilityLabel} disabled={state !== "conectado"} activeOpacity={.55} style={[styles.mediaButton, extra, state !== "conectado" && { opacity: .4 }]} onPress={action}><Text style={styles.mediaText}>{label}</Text></TouchableOpacity>;
 
-  if (activeComputer) return <View style={styles.container}>
+  if (activeComputer) return <View style={[styles.container, compact && { paddingTop: 38, paddingBottom: 12 }]}>
     <StatusBar style="light" />
     <View style={styles.topRow}><TouchableOpacity onPress={() => { socket.current?.close(); setActiveComputer(null); }}><Text style={styles.back}>‹  Ordenadores</Text></TouchableOpacity><Text style={styles.connected}>● {state}</Text></View>
     <Text style={styles.title}>Panel táctil</Text><Text style={styles.subtitle}>{activeComputer.name} · {activeComputer.ip}</Text>
-    <View style={styles.controlRow}>
+    <View style={[styles.controlRow, { minHeight: compact ? 140 : 200 }]}>
       <View {...trackpadResponder.panHandlers} style={styles.trackpad}><Text style={styles.trackpadIcon}>⌖</Text><Text style={styles.trackpadText}>Desliza para mover{`\n`}Toca para hacer clic</Text></View>
       <View {...wheelResponder.panHandlers} style={styles.wheel}><Text style={styles.wheelGlyph}>↕</Text><Text style={styles.wheelText}>RUEDA</Text></View>
     </View>
-    <View style={styles.mediaPanel}><Text style={styles.sectionTitle}>Reproducción y volumen</Text><View style={styles.mediaRow}>{mediaButton("|◀", () => media("previous"))}{mediaButton("▶ / ❚❚", () => media("play_pause"), styles.playButton)}{mediaButton("▶|", () => media("next"))}</View><View style={styles.mediaRow}>{mediaButton("－ Volumen", () => media("volume_down"))}{mediaButton("＋ Volumen", () => media("volume_up"))}</View></View>
-    <View style={styles.tabs}><TouchableOpacity onPress={() => { socket.current?.close(); setActiveComputer(null); }}><Text style={styles.tab}>⌂  Ordenadores</Text></TouchableOpacity><Text style={styles.tabActive}>◎  Panel táctil</Text></View>
-    <View style={styles.mediaRow}>{mediaButton("−5", () => media("seek_back"))}{mediaButton("+5", () => media("seek_forward"))}</View>
+    <View style={[styles.remote, compact && { padding: 12, marginTop: 12 }]}>
+      <View style={styles.remoteHeader}><View style={styles.remoteLed} /><Text style={styles.remoteTitle}>MEDIA REMOTE</Text><Text style={styles.remoteCaption}>CONTROL</Text></View>
+      <View style={styles.modeRow}>{([['video', 'Vídeo'], ['youtube', 'YouTube'], ['system', 'Sistema']] as const).map(([mode, label]) => <TouchableOpacity key={mode} accessibilityRole="button" accessibilityState={{ selected: playMode === mode }} onPress={() => setPlayMode(mode)} style={[styles.mode, playMode === mode && styles.modeSelected]}><Text style={[styles.modeText, playMode === mode && { color: '#b8f5d4' }]}>{label}</Text></TouchableOpacity>)}</View>
+      <View style={styles.transport}>
+        {mediaButton('⏮', () => media('previous'), styles.roundKey, 'Pista anterior')}
+        {mediaButton('▶ Ⅱ', () => media(playMode === 'system' ? 'play_pause' : playMode === 'youtube' ? 'play_pause_youtube' : 'play_pause_video'), [styles.playKey, compact && { width: 66, height: 66, borderRadius: 33 }], 'Reproducir o pausar')}
+        {mediaButton('⏭', () => media('next'), styles.roundKey, 'Pista siguiente')}
+      </View>
+      <View style={styles.seekRow}>{mediaButton('−5', () => media('seek_back'), styles.seekKey, 'Retroceder: flecha izquierda')}<Text style={styles.seekCaption}>VÍDEO</Text>{mediaButton('+5', () => media('seek_forward'), styles.seekKey, 'Adelantar: flecha derecha')}</View>
+      <View style={styles.volumeRocker}>{mediaButton('−', () => media('volume_down'), styles.volumeKey, 'Bajar volumen')}<Text style={styles.volumeLabel}>VOLUMEN</Text>{mediaButton('+', () => media('volume_up'), styles.volumeKey, 'Subir volumen')}</View>
+      <Text style={styles.remoteHint}>{playMode === 'system' ? 'Control multimedia de Windows' : 'Haz clic en el vídeo antes de usar el mando'}</Text>
+    </View>
   </View>;
 
   return <View style={styles.container}>
@@ -208,6 +220,12 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  remote: { marginTop: 18, padding: 18, borderRadius: 28, backgroundColor: '#202a38', borderWidth: 1, borderColor: '#3e4d60', shadowColor: '#000', shadowOpacity: .35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
+  remoteHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }, remoteLed: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#84efb6' }, remoteTitle: { color: '#d8e6f2', fontSize: 10, fontWeight: '800', letterSpacing: 2, flex: 1 }, remoteCaption: { color: '#7c8da5', fontSize: 9, letterSpacing: 1 },
+  modeRow: { flexDirection: 'row', backgroundColor: '#111a27', borderRadius: 12, padding: 3 }, mode: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 9 }, modeSelected: { backgroundColor: '#304b46' }, modeText: { color: '#91a2b8', fontSize: 11, fontWeight: '600' },
+  transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', marginVertical: 12 }, roundKey: { flex: 0, width: 50, height: 50, borderRadius: 25, backgroundColor: '#121c2a', borderWidth: 1, borderColor: '#455367' }, playKey: { flex: 0, width: 80, height: 80, borderRadius: 40, backgroundColor: '#337f69', borderWidth: 3, borderColor: '#73c7a7', elevation: 5 },
+  seekRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }, seekKey: { flex: 0, width: 72, height: 40, borderRadius: 20, backgroundColor: '#172231', borderWidth: 1, borderColor: '#394b61' }, seekCaption: { color: '#7e91a9', fontSize: 9, letterSpacing: 3 },
+  volumeRocker: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101925', borderRadius: 24, borderWidth: 1, borderColor: '#3b4b60' }, volumeKey: { backgroundColor: 'transparent', height: 42 }, volumeLabel: { color: '#a3b4c8', fontSize: 9, letterSpacing: 2 }, remoteHint: { color: '#8b9eb6', textAlign: 'center', fontSize: 10, marginTop: 10 },
   container: { flex: 1, backgroundColor: "#101828", paddingHorizontal: 22, paddingTop: 60, paddingBottom: 16 }, title: { color: "#fff", fontSize: 30, fontWeight: "700" }, subtitle: { color: "#aebbd1", fontSize: 14, marginTop: 6, marginBottom: 16 }, topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, back: { color: "#84caff", fontSize: 16, fontWeight: "700" }, connected: { color: "#32d583", fontWeight: "700" },
   computerList: { flex: 1 }, listContent: { paddingBottom: 80 }, computer: { backgroundColor: "#1d2939", borderRadius: 13, padding: 16, marginBottom: 9, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, computerName: { color: "#fff", fontSize: 16, fontWeight: "700" }, computerIp: { color: "#98a2b3", marginTop: 4 }, connectText: { color: "#fff", fontWeight: "700" }, hint: { color: "#98a2b3", marginTop: 15 },
   searchButton: { marginTop: 12, borderRadius: 12, padding: 15, borderWidth: 1, borderColor: "#475467", alignItems: "center" }, searchText: { color: "#84caff", fontWeight: "700" }, error: { color: "#fda29b", marginTop: 10, textAlign: "center" },
