@@ -22,15 +22,25 @@ async def animate(motion: Motion) -> None:
         previous = now
 
 
-async def handle_client(websocket) -> None:
+async def handle_client(websocket, pairing=None) -> None:
     motion = Motion(read_cursor, write_cursor, screen_bounds())
     controller = RemoteController(motion)
     animation = asyncio.create_task(animate(motion))
     print(f"Móvil conectado: {websocket.remote_address}")
     try:
-        await websocket.send(json.dumps({"type": "remote_mouse", "version": 3, "name": socket.gethostname()}))
+        await websocket.send(json.dumps({"type": "remote_mouse", "version": 4, "name": socket.gethostname(), "pairing_required": pairing is not None}))
+        authenticated = pairing is None
         async for raw_message in websocket:
-            try: await controller.execute(json.loads(raw_message))
+            try:
+                message = json.loads(raw_message)
+                if not authenticated:
+                    if message.get("type") != "pair":
+                        await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "authentication_required"}))
+                        continue
+                    authenticated = pairing.verify(message.get("code"))
+                    await websocket.send(json.dumps({"type": "pair_result", "ok": authenticated, "reason": None if authenticated else "invalid_or_expired_code"}))
+                    continue
+                await controller.execute(message)
             except windows.pyautogui.FailSafeException:
                 motion.reset(); print("Protección de esquina activa: aparta el cursor con el ratón físico.")
             except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error: print(f"Mensaje ignorado: {error}")

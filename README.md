@@ -31,10 +31,10 @@ El flujo de uso es el siguiente:
 | `mobile-app` | React Native, TypeScript y Expo | Interfaz móvil, descubrimiento de equipos y envío de comandos. |
 | `desktop-app` | Python y WebSockets | Servicio local, control del cursor y ejecución de comandos multimedia en Windows. |
 
-La comunicación se realiza por WebSocket dentro de la red local. El servidor anuncia su identidad al conectarse el móvil; así la app distingue un equipo compatible de una dirección que simplemente tenga un puerto abierto.
+La comunicación se realiza por WebSocket dentro de la red local. El servidor anuncia su identidad al conectarse el móvil; así la app distingue un equipo compatible de una dirección que simplemente tenga un puerto abierto. Antes de aceptar controles, el ordenador solicita un código temporal de seis cifras que puede introducirse o escanearse mediante QR.
 
 ## Alcance y seguridad
 
-Es un prototipo para redes Wi-Fi de confianza. La versión actual no incorpora autenticación ni cifrado de extremo a extremo, por lo que no debe exponerse a Internet ni usarse en redes públicas.
+Es un prototipo para redes Wi-Fi de confianza. La versión actual usa emparejamiento temporal, pero aún no cifra el canal: TLS y la verificación de certificados son la siguiente fase. No debe exponerse a Internet ni usarse en redes públicas.
 
 La guía de instalación, ejecución y resolución de incidencias se mantiene de forma local en `despliege.md` y no se publica en el repositorio.

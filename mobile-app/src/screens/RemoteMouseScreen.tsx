@@ -1,5 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import * as Network from "expo-network";
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Alert, Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,6 +33,12 @@ function RemoteMouse() {
   const [searchMessage, setSearchMessage] = useState('');
   const searchRunning = useRef(false);
   const [showAddSheet, setShowAddSheet] = useState(false);
+  const [showPairingSheet, setShowPairingSheet] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [pairingCode, setPairingCode] = useState('');
+  const [pairingComputer, setPairingComputer] = useState<SavedComputer | null>(null);
+  const [pairingError, setPairingError] = useState('');
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const socket = useRef<WebSocket | null>(null);
   const lastPosition = useRef<{ x: number; y: number } | null>(null);
   const lastWheelY = useRef(0);
@@ -73,19 +80,50 @@ function RemoteMouse() {
       } },
     ]);
 
-  const connect = (computer: SavedComputer) => {
+  const connect = (computer: SavedComputer, code: string) => {
     socket.current?.close();
     setState("conectando");
     const ws = connectRemoteSocket(computer.ip);
     socket.current = ws;
-    ws.onopen = () => {
+    ws.onopen = () => { if (socket.current === ws) sendRemoteMessage(ws, { type: 'pair', code }); };
+    ws.onmessage = (event) => {
       if (socket.current !== ws) return;
-      rememberComputer(computer);
-      setActiveComputer(computer);
-      setState("conectado");
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type === 'pair_result') {
+          if (!message.ok) { setPairingError('El código no es válido o ha caducado.'); setState('error'); ws.close(); return; }
+          rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado');
+        }
+      } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
     ws.onerror = () => { if (socket.current === ws) setState("error"); };
     ws.onclose = () => { if (socket.current === ws) setState("desconectado"); };
+  };
+
+  const openPairing = (computer: SavedComputer) => {
+    setPairingComputer(computer); setPairingCode(''); setPairingError(''); setShowAddSheet(false); setShowPairingSheet(true);
+  };
+
+  const submitPairing = () => {
+    if (!pairingComputer || pairingCode.trim().length !== 6) { setPairingError('Introduce el código temporal de seis cifras.'); return; }
+    setPairingError(''); connect(pairingComputer, pairingCode.trim());
+  };
+
+  const openScanner = async () => {
+    if (!cameraPermission?.granted) {
+      const permission = await requestCameraPermission();
+      if (!permission.granted) { setPairingError('Necesitamos permiso para usar la cámara.'); return; }
+    }
+    setShowScanner(true);
+  };
+
+  const handleQr = ({ data }: { data: string }) => {
+    try {
+      const url = new URL(data);
+      const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const expires = Number(url.searchParams.get('expires'));
+      if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
+      setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
+    } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };
 
   const findComputer = async () => {
@@ -116,8 +154,7 @@ function RemoteMouse() {
     const ip = host.trim().replace(/^ws:\/\//, "").replace(/:\d+$/, "").replace(/\/$/, "");
     if (!ip) return;
     ignored.current.delete(ip);
-    rememberComputer({ name: name.trim() || "Mi ordenador", ip });
-    setShowAddSheet(false);
+    openPairing({ name: name.trim() || "Mi ordenador", ip });
     setName("");
     setHost("");
   };
@@ -183,16 +220,18 @@ function RemoteMouse() {
   </ScrollView>;
 
   return <View style={styles.container}>
-    <StatusBar style="light" /><Text style={styles.title}>Ordenadores</Text><Text style={styles.subtitle}>Elige un ordenador para empezar</Text>
+    <StatusBar style="light" /><View style={styles.listHeader}><View><Text style={styles.title}>Ordenadores</Text><Text style={styles.subtitle}>Elige un ordenador para empezar</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="Añadir ordenador mediante código QR" style={styles.qrButton} onPress={openScanner}><Text style={styles.qrButtonIcon}>▣</Text><Text style={styles.qrButtonText}>QR</Text></TouchableOpacity></View>
     <ScrollView style={styles.computerList} contentContainerStyle={styles.listContent}>
-      {computers.map((computer) => <TouchableOpacity key={computer.ip} style={styles.computer} onPress={() => connect(computer)} onLongPress={() => deleteComputer(computer)} delayLongPress={500}><View><Text style={styles.computerName}>{computer.name}</Text><Text style={styles.computerIp}>{computer.ip}</Text></View><Text style={styles.connectText}>Conectar  ›</Text></TouchableOpacity>)}
+      {computers.map((computer) => <TouchableOpacity key={computer.ip} style={styles.computer} onPress={() => openPairing(computer)} onLongPress={() => deleteComputer(computer)} delayLongPress={500}><View><Text style={styles.computerName}>{computer.name}</Text><Text style={styles.computerIp}>{computer.ip}</Text></View><Text style={styles.connectText}>Conectar  ›</Text></TouchableOpacity>)}
       {!computers.length && <Text style={styles.hint}>{searching ? "Buscando ordenadores en esta Wi‑Fi…" : "Aún no hay ordenadores guardados."}</Text>}
       <TouchableOpacity style={styles.searchButton} onPress={findComputer} disabled={searching}><Text style={styles.searchText}>{searching ? "Buscando…" : "⌕  Buscar ordenadores en esta Wi‑Fi"}</Text></TouchableOpacity>
       {!!searchMessage && <Text style={styles.hint}>{searchMessage}</Text>}
       {state === "error" && <Text style={styles.error}>No se pudo conectar con el ordenador seleccionado.</Text>}
     </ScrollView>
     <TouchableOpacity style={styles.fab} onPress={() => setShowAddSheet(true)}><Text style={styles.fabText}>＋</Text></TouchableOpacity>
-    <Modal transparent animationType="slide" visible={showAddSheet} onRequestClose={() => setShowAddSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Añadir ordenador</Text><TouchableOpacity onPress={() => setShowAddSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><TextInput value={name} onChangeText={setName} placeholder="Nombre (ej. Mi PC)" placeholderTextColor="#92a0b8" style={styles.input} /><TextInput value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numeric" placeholder="IP (ej. 192.168.1.25)" placeholderTextColor="#92a0b8" style={styles.input} /><TouchableOpacity style={styles.addButton} onPress={addComputer}><Text style={styles.connectText}>Guardar ordenador</Text></TouchableOpacity></View></View></Modal>
+    <Modal transparent animationType="slide" visible={showAddSheet} onRequestClose={() => setShowAddSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Añadir ordenador</Text><TouchableOpacity onPress={() => setShowAddSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><TextInput value={name} onChangeText={setName} placeholder="Nombre (ej. Mi PC)" placeholderTextColor="#92a0b8" style={styles.input} /><TextInput value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numeric" placeholder="IP (ej. 192.168.1.25)" placeholderTextColor="#92a0b8" style={styles.input} /><TouchableOpacity style={styles.addButton} onPress={addComputer}><Text style={styles.connectText}>Continuar con código</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity></View></View></Modal>
+    <Modal transparent animationType="slide" visible={showPairingSheet} onRequestClose={() => setShowPairingSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Confirmar ordenador</Text><TouchableOpacity onPress={() => setShowPairingSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><Text style={styles.pairingInfo}>{pairingComputer?.name} · {pairingComputer?.ip}</Text><Text style={styles.pairingHelp}>Introduce el código de seis cifras que muestra Mouse Phone en el ordenador.</Text><TextInput value={pairingCode} onChangeText={(value) => setPairingCode(value.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" maxLength={6} placeholder="000000" placeholderTextColor="#92a0b8" style={[styles.input, styles.codeInput]} /><TouchableOpacity style={styles.addButton} onPress={submitPairing}><Text style={styles.connectText}>Conectar de forma segura</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity>{!!pairingError && <Text style={styles.error}>{pairingError}</Text>}</View></View></Modal>
+    <Modal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}><View style={styles.scanner}><CameraView style={styles.camera} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={handleQr} /><View style={styles.scannerOverlay}><Text style={styles.scannerTitle}>Escanea el QR del ordenador</Text><Text style={styles.scannerHint}>El código cambia automáticamente por seguridad.</Text><TouchableOpacity style={styles.scannerClose} onPress={() => setShowScanner(false)}><Text style={styles.connectText}>Cancelar</Text></TouchableOpacity></View></View></Modal>
   </View>;
 }
 
@@ -205,12 +244,12 @@ const styles = StyleSheet.create({
   transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', marginVertical: 12 }, roundKey: { flex: 0, width: 50, height: 50, borderRadius: 25, backgroundColor: '#121c2a', borderWidth: 1, borderColor: '#455367' }, playKey: { flex: 0, width: 80, height: 80, borderRadius: 40, backgroundColor: '#337f69', borderWidth: 3, borderColor: '#73c7a7', elevation: 5 },
   seekRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }, seekKey: { flex: 0, width: 72, height: 40, borderRadius: 20, backgroundColor: '#172231', borderWidth: 1, borderColor: '#394b61' }, seekCaption: { color: '#7e91a9', fontSize: 9, letterSpacing: 3 },
   volumeRocker: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101925', borderRadius: 24, borderWidth: 1, borderColor: '#3b4b60' }, volumeKey: { backgroundColor: 'transparent', height: 42 }, volumeLabel: { color: '#a3b4c8', fontSize: 9, letterSpacing: 2 }, remoteHint: { color: '#8b9eb6', textAlign: 'center', fontSize: 10, marginTop: 10 },
-  container: { flex: 1, backgroundColor: "#101828", paddingHorizontal: 22, paddingTop: 12, paddingBottom: 16 }, title: { color: "#fff", fontSize: 30, fontWeight: "700" }, subtitle: { color: "#aebbd1", fontSize: 14, marginTop: 6, marginBottom: 16 }, topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, back: { color: "#84caff", fontSize: 16, fontWeight: "700" }, connected: { color: "#32d583", fontWeight: "700" },
+  container: { flex: 1, backgroundColor: "#101828", paddingHorizontal: 22, paddingTop: 12, paddingBottom: 16 }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, title: { color: "#fff", fontSize: 30, fontWeight: "700" }, subtitle: { color: "#aebbd1", fontSize: 14, marginTop: 6, marginBottom: 16 }, qrButton: { width: 54, height: 54, borderRadius: 14, borderWidth: 1, borderColor: '#4d6480', backgroundColor: '#182a3d', justifyContent: 'center', alignItems: 'center' }, qrButtonIcon: { fontSize: 20, color: '#84caff', lineHeight: 19 }, qrButtonText: { color: '#bcd3ee', fontSize: 9, fontWeight: '800', letterSpacing: 1 }, topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, back: { color: "#84caff", fontSize: 16, fontWeight: "700" }, connected: { color: "#32d583", fontWeight: "700" },
   computerList: { flex: 1 }, listContent: { paddingBottom: 80 }, computer: { backgroundColor: "#1d2939", borderRadius: 13, padding: 16, marginBottom: 9, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, computerName: { color: "#fff", fontSize: 16, fontWeight: "700" }, computerIp: { color: "#98a2b3", marginTop: 4 }, connectText: { color: "#fff", fontWeight: "700" }, hint: { color: "#98a2b3", marginTop: 15 },
   searchButton: { marginTop: 12, borderRadius: 12, padding: 15, borderWidth: 1, borderColor: "#475467", alignItems: "center" }, searchText: { color: "#84caff", fontWeight: "700" }, error: { color: "#fda29b", marginTop: 10, textAlign: "center" },
   fab: { position: "absolute", right: 24, bottom: 76, width: 60, height: 60, borderRadius: 30, backgroundColor: "#1570ef", justifyContent: "center", alignItems: "center", elevation: 8 }, fabText: { color: "#fff", fontSize: 32, lineHeight: 36, fontWeight: "300" },
   tabs: { flexDirection: "row", justifyContent: "space-around", borderTopWidth: 1, borderTopColor: "#344054", paddingTop: 14 }, tab: { color: "#98a2b3", fontWeight: "600" }, tabActive: { color: "#84caff", fontWeight: "700" },
-  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,.55)", justifyContent: "flex-end" }, sheet: { backgroundColor: "#182230", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, paddingBottom: 36 }, sheetHandle: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: "#667085", marginBottom: 16 }, sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }, sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700" }, close: { color: "#98a2b3", fontSize: 30 }, input: { height: 50, marginBottom: 11, borderRadius: 10, backgroundColor: "#1d2939", color: "#fff", paddingHorizontal: 14 }, addButton: { alignItems: "center", padding: 16, borderRadius: 12, backgroundColor: "#1570ef" },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,.55)", justifyContent: "flex-end" }, sheet: { backgroundColor: "#182230", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, paddingBottom: 36 }, sheetHandle: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: "#667085", marginBottom: 16 }, sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }, sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700" }, close: { color: "#98a2b3", fontSize: 30 }, input: { height: 50, marginBottom: 11, borderRadius: 10, backgroundColor: "#1d2939", color: "#fff", paddingHorizontal: 14 }, codeInput: { textAlign: 'center', fontSize: 26, letterSpacing: 8, fontWeight: '700' }, pairingInfo: { color: '#d5e2f1', fontWeight: '700', marginBottom: 6 }, pairingHelp: { color: '#98a2b3', lineHeight: 20, marginBottom: 16 }, qrAlternative: { alignItems: 'center', padding: 14, marginTop: 6 }, addButton: { alignItems: "center", padding: 16, borderRadius: 12, backgroundColor: "#1570ef" }, scanner: { flex: 1, backgroundColor: '#101828' }, camera: { flex: 1 }, scannerOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 26, backgroundColor: 'rgba(16,24,40,.94)' }, scannerTitle: { color: '#fff', fontSize: 21, fontWeight: '700' }, scannerHint: { color: '#b4c4d7', marginTop: 6 }, scannerClose: { marginTop: 18, alignItems: 'center', padding: 14, borderRadius: 12, backgroundColor: '#344054' },
   controlRow: { flex: 1, flexDirection: "row", gap: 10, minHeight: 250 }, trackpad: { flex: 1, borderRadius: 20, borderWidth: 1, borderColor: "#475467", backgroundColor: "#182230", alignItems: "center", justifyContent: "center" }, trackpadIcon: { color: "#667085", fontSize: 44, marginBottom: 14 }, trackpadText: { color: "#cbd5e1", textAlign: "center", lineHeight: 22 }, wheel: { width: 52, borderRadius: 18, borderWidth: 1, borderColor: "#475467", backgroundColor: "#1d2939", justifyContent: "space-between", alignItems: "center", paddingVertical: 18 }, wheelGlyph: { color: "#84caff", fontSize: 24 }, wheelText: { color: "#98a2b3", fontSize: 9, fontWeight: "700", transform: [{ rotate: "-90deg" }] },
   mediaPanel: { paddingBottom: 8 }, sectionTitle: { color: "#eaecf0", fontWeight: "700", marginTop: 15, marginBottom: 10 }, mediaRow: { flexDirection: "row", gap: 10, marginBottom: 10 }, mediaButton: { flex: 1, height: 50, borderRadius: 12, backgroundColor: "#344054", alignItems: "center", justifyContent: "center" }, playButton: { backgroundColor: "#1570ef", flex: 1.3 }, mediaText: { color: "#fff", fontWeight: "700" },
 });

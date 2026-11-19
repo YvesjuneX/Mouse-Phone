@@ -4,12 +4,14 @@
   "type": "object",
   "required": ["type"],
   "properties": {
-    "type": { "enum": ["remote_mouse", "move", "move_end", "click", "scroll", "media"] },
+    "type": { "enum": ["remote_mouse", "pair", "pair_result", "move", "move_end", "click", "scroll", "media"] },
     "dx": { "type": "number" },
     "dy": { "type": "number" },
     "amount": { "type": "integer" },
     "action": { "type": "string" },
     "name": { "type": "string" },
-    "version": { "type": "integer" }
+    "version": { "type": "integer" },
+    "code": { "type": "string", "pattern": "^[0-9]{6}$" },
+    "ok": { "type": "boolean" }
   }
 }
