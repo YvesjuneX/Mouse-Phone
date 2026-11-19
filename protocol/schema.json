@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mouse Phone WebSocket message",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": { "enum": ["remote_mouse", "move", "move_end", "click", "scroll", "media"] },
+    "dx": { "type": "number" },
+    "dy": { "type": "number" },
+    "amount": { "type": "integer" },
+    "action": { "type": "string" },
+    "name": { "type": "string" },
+    "version": { "type": "integer" }
+  }
+}

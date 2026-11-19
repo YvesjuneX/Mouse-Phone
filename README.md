@@ -1,60 +1,40 @@
-# Remote Mouse: guía rápida de prueba
+# Mouse Phone
 
-## Mando y movimiento (actualización)
+**Mouse Phone** convierte un teléfono móvil en un mando remoto para un ordenador Windows dentro de la misma red Wi-Fi. El proyecto está pensado como una demostración de comunicación en tiempo real entre una aplicación móvil y un servicio de escritorio.
 
-La carpeta actual del proyecto es `C:\Users\juanl\Desktop\Mouse Phone`.
-Reinicia `python server.py` en `desktop-app` y recarga Expo Go tras iniciar
-`npm.cmd start -- --lan --clear` en `mobile-app`.
+## Funcionamiento actual
 
-El cursor interpola el destino en intervalos previstos de 1/120 s con un seguimiento
-de 8 ms. Conserva fracciones, respeta los bordes y cede al ratón físico. La cadencia
-real depende del planificador de Windows y de la red.
+La aplicación del ordenador abre un servidor WebSocket local. La aplicación móvil busca ordenadores compatibles en la red Wi-Fi, permite guardar o añadir equipos por IP y establece una conexión con el ordenador seleccionado. Los movimientos y acciones del móvil se envían al servidor, que los traduce en acciones nativas de Windows.
 
-El mando ofrece tres modos de reproducción: **Vídeo** envía espacio, **YouTube**
-envía K y **Sistema** envía la tecla multimedia de Windows. En los dos primeros,
-haz clic en el reproductor antes de usarlo. No se muestra un estado ficticio de
-reproducción: el botón central siempre permite reproducir/pausar. −5/+5 siguen
-enviando las flechas, y su efecto depende del reproductor.
+El flujo de uso es el siguiente:
 
-Scroll aumentado un 25 %. Solo queda navegación superior en el panel táctil.
+1. Se inicia el servicio en el ordenador.
+2. Desde el móvil se busca un ordenador en la red o se añade su dirección IP.
+3. El ordenador queda guardado para futuros usos.
+4. Al seleccionarlo se abre el panel táctil y el móvil pasa a actuar como mando.
 
-El ordenador y el móvil deben estar conectados a la misma red Wi-Fi. La primera configuración requiere Internet para descargar paquetes de Expo.
+## Características
 
-## 1. Iniciar el servidor del ordenador (Windows)
+- Descubrimiento automático de ordenadores en la red local y conexión manual por IP.
+- Lista persistente de ordenadores guardados en el móvil, con opción de eliminarlos mediante pulsación prolongada.
+- Panel táctil para mover el cursor y toque para clic izquierdo.
+- Movimiento del cursor interpolado en el ordenador para una respuesta fluida y estable.
+- Barra lateral de desplazamiento con sensibilidad ajustada.
+- Controles multimedia generales: reproducción/pausa, pista anterior, pista siguiente, volumen y saltos de −5/+5 segundos mediante las teclas de dirección.
+- Interfaz adaptada a las zonas seguras de Android e iOS para evitar que el mando quede oculto bajo las barras del sistema.
+- El servicio de escritorio reemplaza automáticamente una instancia anterior que estuviera usando su puerto.
 
-Abre PowerShell y ejecuta:
+## Arquitectura
 
-```powershell
-cd C:\Users\juanl\Desktop\RemoteMouse\desktop-app
-python server.py
-```
+| Componente | Tecnología | Responsabilidad |
+| --- | --- | --- |
+| `mobile-app` | React Native, TypeScript y Expo | Interfaz móvil, descubrimiento de equipos y envío de comandos. |
+| `desktop-app` | Python y WebSockets | Servicio local, control del cursor y ejecución de comandos multimedia en Windows. |
 
-Deja esta ventana abierta. Anota la IP que muestra, por ejemplo `192.168.1.129`. Si Windows pregunta, permite que Python se comunique en redes privadas.
+La comunicación se realiza por WebSocket dentro de la red local. El servidor anuncia su identidad al conectarse el móvil; así la app distingue un equipo compatible de una dirección que simplemente tenga un puerto abierto.
 
-Al ejecutar `python server.py`, el programa detecta y cierra una instancia anterior de Remote Mouse que esté usando el puerto `8765`, y después inicia la nueva versión. Si muestra que el puerto lo ocupa otro programa, cierra ese programa o cambia el puerto en el código.
+## Alcance y seguridad
 
-## 2. Abrir la aplicación en el móvil
+Es un prototipo para redes Wi-Fi de confianza. La versión actual no incorpora autenticación ni cifrado de extremo a extremo, por lo que no debe exponerse a Internet ni usarse en redes públicas.
 
-1. Instala **Expo Go** desde Google Play (Android) o App Store (iPhone).
-2. Abre una segunda ventana de PowerShell y ejecuta:
-
-   ```powershell
-   cd C:\Users\juanl\Desktop\RemoteMouse\mobile-app
-   npm.cmd install
-   npm.cmd start -- --lan --clear
-   ```
-
-   Usa `npm.cmd`: en algunas configuraciones de Windows PowerShell bloquea el script `npm.ps1`.
-3. Espera a que Expo muestre el código QR. Escanéalo desde Expo Go. Si la consola muestra una dirección `exp://...`, también puedes escribirla en Expo Go.
-4. La pestaña **Ordenadores** inicia una búsqueda al abrirse. Cuando encuentra un equipo lo añade a la lista sin abrir el panel. También puedes buscar de nuevo con el botón inferior o añadir una IP con el botón `+` redondo de la esquina inferior derecha.
-5. Los ordenadores añadidos o conectados se conservan en el móvil. Al conectar, pasa al **Panel táctil**: desliza un dedo para mover el cursor, toca para hacer clic y desliza por la barra lateral para usar la rueda. Los botones inferiores controlan reproducción, pista anterior/siguiente y volumen.
-
-Si el móvil no se conecta, comprueba que ambos estén en la misma Wi-Fi y que el Firewall de Windows permita las conexiones privadas a Python. La detección automática busca el servidor dentro de la subred local.
-
-## Versiones de Expo Go
-
-El proyecto usa Expo SDK 58 para coincidir con Expo Go SDK 58. Si actualizas paquetes, detén Expo con `Ctrl+C` y vuelve a ejecutar `npm.cmd install` y `npm.cmd start -- --lan` desde `mobile-app`.
-
-## Seguridad
-
-Este prototipo no cifra el tráfico ni autentica clientes. Úsalo únicamente en una red Wi-Fi de confianza y detén el servidor cuando termines.
+La guía de instalación, ejecución y resolución de incidencias se mantiene de forma local en `despliege.md` y no se publica en el repositorio.

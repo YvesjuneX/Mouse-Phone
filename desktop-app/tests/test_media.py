@@ -1,7 +1,11 @@
 import asyncio
+import sys
 import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import server
 
 
@@ -25,8 +29,8 @@ class Connection:
 
 
 class MediaTests(unittest.TestCase):
-    def test_two_taps_send_two_complete_presses_in_each_mode(self):
-        for action, key in [('play_pause', 'playpause'), ('play_pause_video', 'space'), ('play_pause_youtube', 'k')]:
+    def test_two_taps_send_two_complete_presses(self):
+        for action, key in [('play_pause', 'playpause')]:
             with self.subTest(action=action), patch.object(server.pyautogui, 'keyDown') as down, patch.object(server.pyautogui, 'keyUp') as up:
                 asyncio.run(server.handle_client(Connection(action)))
                 self.assertEqual(down.call_count, 2)
