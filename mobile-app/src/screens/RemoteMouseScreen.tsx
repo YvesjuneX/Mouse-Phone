@@ -96,7 +96,7 @@ function RemoteMouse() {
         }
       } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
-    ws.onerror = () => { if (socket.current === ws) setState("error"); };
+    ws.onerror = () => { if (socket.current === ws) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
     ws.onclose = () => { if (socket.current === ws) setState("desconectado"); };
   };
 
@@ -120,8 +120,8 @@ function RemoteMouse() {
   const handleQr = ({ data }: { data: string }) => {
     try {
       const url = new URL(data);
-      const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const expires = Number(url.searchParams.get('expires'));
-      if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
+      const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const expires = Number(url.searchParams.get('expires')); const tls = url.searchParams.get('tls');
+      if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || code.length !== 6 || tls !== '1' || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
       setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
     } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };

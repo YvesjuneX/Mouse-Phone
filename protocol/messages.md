@@ -1,6 +1,6 @@
 # Protocolo WebSocket
 
-El móvil se conecta al puerto `8765` del ordenador mediante WebSocket. Cada mensaje es un objeto JSON UTF-8.
+El móvil se conecta al puerto `8765` del ordenador mediante WebSocket seguro (`wss://`). Cada mensaje es un objeto JSON UTF-8 dentro de un canal TLS.
 
 | Dirección | Tipo | Campos |
 | --- | --- | --- |
@@ -13,6 +13,6 @@ El móvil se conecta al puerto `8765` del ordenador mediante WebSocket. Cada men
 | Móvil → ordenador | `scroll` | `amount` entero |
 | Móvil → ordenador | `media` | `action` |
 
-Antes de ejecutar acciones, el móvil debe recibir un resultado `pair_result` correcto. El código se muestra en la aplicación de escritorio, rota cada cinco minutos y se incluye en el QR `mousephone://pair` para evitar teclearlo. El QR no es aún una prueba criptográfica de identidad: TLS y el pinning del certificado se implementarán en la siguiente fase.
+Antes de ejecutar acciones, el móvil debe recibir un resultado `pair_result` correcto. El código se muestra en la aplicación de escritorio, rota cada cinco minutos y se incluye en el QR `mousephone://pair` para evitar teclearlo. El QR contiene el indicador TLS y la huella SHA-256 de la CA local. Antes de conectarse, el sistema operativo del móvil debe confiar en esa CA.
 
 El esquema actual se mantiene en `schema.json`. La validación estricta del contenido de cada mensaje se implementará en la issue de seguridad correspondiente.

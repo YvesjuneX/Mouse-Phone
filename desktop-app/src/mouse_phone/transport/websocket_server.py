@@ -28,7 +28,7 @@ async def handle_client(websocket, pairing=None) -> None:
     animation = asyncio.create_task(animate(motion))
     print(f"Móvil conectado: {websocket.remote_address}")
     try:
-        await websocket.send(json.dumps({"type": "remote_mouse", "version": 4, "name": socket.gethostname(), "pairing_required": pairing is not None}))
+        await websocket.send(json.dumps({"type": "remote_mouse", "version": 5, "name": socket.gethostname(), "pairing_required": pairing is not None, "encrypted": True}))
         authenticated = pairing is None
         async for raw_message in websocket:
             try:

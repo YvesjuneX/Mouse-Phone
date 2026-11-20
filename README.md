@@ -35,6 +35,6 @@ La comunicación se realiza por WebSocket dentro de la red local. El servidor an
 
 ## Alcance y seguridad
 
-Es un prototipo para redes Wi-Fi de confianza. La versión actual usa emparejamiento temporal, pero aún no cifra el canal: TLS y la verificación de certificados son la siguiente fase. No debe exponerse a Internet ni usarse en redes públicas.
+Es un prototipo para redes Wi-Fi de confianza. La conexión de control usa TLS y emparejamiento temporal. Para la primera conexión hay que instalar la CA local del ordenador en el almacén de confianza del móvil; consulta la guía local de despliegue. No debe exponerse a Internet ni usarse en redes públicas.
 
 La guía de instalación, ejecución y resolución de incidencias se mantiene de forma local en `despliege.md` y no se publica en el repositorio.
