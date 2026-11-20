@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["type"],
   "properties": {
-    "type": { "enum": ["remote_mouse", "pair", "pair_result", "move", "move_end", "click", "scroll", "media"] },
+    "type": { "enum": ["remote_mouse", "session_init", "session_offer", "secure", "confirm", "move", "move_end", "click", "scroll", "media"] },
     "dx": { "type": "number" },
     "dy": { "type": "number" },
     "amount": { "type": "integer" },
@@ -12,6 +12,11 @@
     "name": { "type": "string" },
     "version": { "type": "integer" },
     "code": { "type": "string", "pattern": "^[0-9]{6}$" },
-    "ok": { "type": "boolean" }
+    "ok": { "type": "boolean" },
+    "counter": { "type": "integer", "minimum": 1 },
+    "nonce": { "type": "string" },
+    "data": { "type": "string" },
+    "mode": { "enum": ["qr", "code"] },
+    "public": { "type": "string" }
   }
 }

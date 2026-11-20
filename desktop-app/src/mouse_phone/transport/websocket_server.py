@@ -12,6 +12,7 @@ from mouse_phone.input.motion import Motion
 from mouse_phone.input.windows import read_cursor, screen_bounds, write_cursor
 from mouse_phone.input import windows
 from mouse_phone.security.session_crypto import SecureSession, new_keypair, unb64
+from mouse_phone.security.message_validation import MAX_MESSAGE_BYTES, MessageValidationError, validate_message
 
 
 async def animate(motion: Motion) -> None:
@@ -33,7 +34,8 @@ async def handle_client(websocket, pairing=None) -> None:
         authenticated, session = pairing is None, None
         async for raw_message in websocket:
             try:
-                message = json.loads(raw_message)
+                if not isinstance(raw_message, str) or len(raw_message.encode("utf-8")) > MAX_MESSAGE_BYTES: raise MessageValidationError("message too large")
+                message = validate_message(json.loads(raw_message))
                 if not authenticated:
                     if message.get("type") == "session_init":
                         private, public = new_keypair()
@@ -46,18 +48,18 @@ async def handle_client(websocket, pairing=None) -> None:
                     if message.get("type") != "secure" or session is None:
                         await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "authentication_required"}))
                         continue
-                    confirmation = session.decrypt(message)
+                    confirmation = validate_message(session.decrypt(message))
                     if confirmation.get("type") != "confirm" or (confirmation.get("mode") == "code" and confirmation.get("code") != session.sas): raise ValueError("invalid confirmation")
                     authenticated = True
                     await websocket.send(json.dumps(session.encrypt({"type": "session_ready"})))
                     continue
                 if session is not None:
                     if message.get("type") != "secure": raise ValueError("unencrypted command")
-                    message = session.decrypt(message)
+                    message = validate_message(session.decrypt(message))
                 await controller.execute(message)
             except windows.pyautogui.FailSafeException:
                 motion.reset(); print("Protección de esquina activa: aparta el cursor con el ratón físico.")
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error: print(f"Mensaje ignorado: {error}")
+            except (MessageValidationError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error: print(f"Mensaje ignorado: {error}")
     except websockets.ConnectionClosed: pass
     finally:
         animation.cancel()
