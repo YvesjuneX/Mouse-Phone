@@ -7,6 +7,7 @@ import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets
 import { discoverComputers, discoveryAddresses } from '../services/network/discovery';
 import { loadComputers, saveComputers } from '../services/storage/computers';
 import { connectRemoteSocket, sendRemoteMessage } from '../services/websocket/remoteSocket';
+import { newKeyPair, SecureSession } from '../services/websocket/secureSession';
 import { MediaButton } from '../components/MediaButton';
 import type { SavedComputer } from '../features/computers/model';
 import { remoteCommands } from '../features/remote-control/commands';
@@ -38,6 +39,7 @@ function RemoteMouse() {
   const [pairingCode, setPairingCode] = useState('');
   const [pairingComputer, setPairingComputer] = useState<SavedComputer | null>(null);
   const [pairingError, setPairingError] = useState('');
+  const pairingSecret = useRef('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const socket = useRef<WebSocket | null>(null);
   const lastPosition = useRef<{ x: number; y: number } | null>(null);
@@ -65,8 +67,9 @@ function RemoteMouse() {
     });
   };
 
+  const secureSession = useRef<SecureSession | null>(null);
   const send = (message: object) => {
-    sendRemoteMessage(socket.current, message);
+    if (secureSession.current) sendRemoteMessage(socket.current, secureSession.current.encrypt(message));
   };
 
   const deleteComputer = (computer: SavedComputer) => Alert.alert(
@@ -85,15 +88,13 @@ function RemoteMouse() {
     setState("conectando");
     const ws = connectRemoteSocket(computer.ip);
     socket.current = ws;
-    ws.onopen = () => { if (socket.current === ws) sendRemoteMessage(ws, { type: 'pair', code }); };
+    ws.onopen = () => { if (socket.current === ws) { const keys = newKeyPair(); (ws as any).keys = keys; sendRemoteMessage(ws, { type: 'session_init', mode: pairingSecret.current ? 'qr' : 'code', public: keys.publicKey }); } };
     ws.onmessage = (event) => {
       if (socket.current !== ws) return;
       try {
         const message = JSON.parse(String(event.data));
-        if (message.type === 'pair_result') {
-          if (!message.ok) { setPairingError('El código no es válido o ha caducado.'); setState('error'); ws.close(); return; }
-          rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado');
-        }
+        if (message.type === 'session_offer') { const session = new SecureSession((ws as any).keys.secretKey, message.public, pairingSecret.current); secureSession.current = session; if (!pairingSecret.current) { setPairingCode(''); setPairingError('Introduce el nuevo código de seis cifras que muestra ahora el ordenador.'); return; } sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: 'qr' })); }
+        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
       } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
     ws.onerror = () => { if (socket.current === ws) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
@@ -101,12 +102,17 @@ function RemoteMouse() {
   };
 
   const openPairing = (computer: SavedComputer) => {
+    pairingSecret.current = ''; secureSession.current = null;
     setPairingComputer(computer); setPairingCode(''); setPairingError(''); setShowAddSheet(false); setShowPairingSheet(true);
   };
 
   const submitPairing = () => {
-    if (!pairingComputer || pairingCode.trim().length !== 6) { setPairingError('Introduce el código temporal de seis cifras.'); return; }
-    setPairingError(''); connect(pairingComputer, pairingCode.trim());
+    if (!pairingComputer) return;
+    if (secureSession.current && !pairingSecret.current) {
+      if (pairingCode.trim() !== secureSession.current.sas) { setPairingError('El código no coincide con el que muestra el ordenador.'); return; }
+      sendRemoteMessage(socket.current, secureSession.current.encrypt({ type: 'confirm', mode: 'code', code: pairingCode.trim() })); return;
+    }
+    setPairingError('Conectando… mira el código temporal que acaba de aparecer en el ordenador.'); connect(pairingComputer, pairingCode.trim());
   };
 
   const openScanner = async () => {
@@ -120,9 +126,9 @@ function RemoteMouse() {
   const handleQr = ({ data }: { data: string }) => {
     try {
       const url = new URL(data);
-      const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const expires = Number(url.searchParams.get('expires')); const tls = url.searchParams.get('tls');
-      if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || code.length !== 6 || tls !== '1' || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
-      setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
+      const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const secret = url.searchParams.get('secret'); const expires = Number(url.searchParams.get('expires'));
+      if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || !secret || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
+      pairingSecret.current = secret; setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
     } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };
 

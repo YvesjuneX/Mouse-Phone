@@ -30,7 +30,7 @@ export function probeComputer(ip: string, timeoutMs = 2500): Promise<Computer | 
     };
     const timer = setTimeout(() => finish(null), timeoutMs);
     try {
-      ws = new WebSocket(`wss://${ip}:${DESKTOP_PORT}`);
+      ws = new WebSocket(`ws://${ip}:${DESKTOP_PORT}`);
       ws.onmessage = (event) => {
         try {
           const hello = JSON.parse(String(event.data));

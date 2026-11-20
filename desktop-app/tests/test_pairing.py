@@ -25,3 +25,9 @@ class PairingManagerTests(unittest.TestCase):
         self.now += 1
         renewed = self.manager.renew()
         self.assertGreater(renewed.expires_at, second.expires_at)
+
+    def test_qr_secret_is_random_and_changes_when_code_is_renewed(self):
+        first = self.manager.current().qr_secret
+        second = self.manager.renew().qr_secret
+        self.assertEqual(len(first), 32)
+        self.assertNotEqual(first, second)

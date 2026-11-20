@@ -13,6 +13,7 @@ import time
 class PairingDetails:
     code: str
     expires_at: float
+    qr_secret: bytes
 
 
 class PairingManager:
@@ -26,7 +27,7 @@ class PairingManager:
         with self._lock:
             now = self.clock()
             if self._details is None or now >= self._details.expires_at:
-                self._details = PairingDetails(f"{secrets.randbelow(1_000_000):06d}", now + self.lifetime_seconds)
+                self._details = PairingDetails(f"{secrets.randbelow(1_000_000):06d}", now + self.lifetime_seconds, secrets.token_bytes(32))
             return self._details
 
     def verify(self, code: object) -> bool:
@@ -37,3 +38,9 @@ class PairingManager:
         with self._lock:
             self._details = None
         return self.current()
+
+    def show_code(self, code: str) -> None:
+        with self._lock:
+            if self._details is None:
+                raise RuntimeError("No active pairing code")
+            self._details = PairingDetails(code, self._details.expires_at, self._details.qr_secret)

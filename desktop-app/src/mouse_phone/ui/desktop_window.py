@@ -4,18 +4,18 @@ import tkinter as tk
 from tkinter import ttk
 import os
 from urllib.parse import urlencode
+import base64
 
 import qrcode
 from PIL import ImageTk
 
 from mouse_phone.config.settings import PORT
 from mouse_phone.security.pairing import PairingManager
-from mouse_phone.security.tls import TlsMaterial
 
 
 class DesktopWindow:
-    def __init__(self, ip: str, pairing: PairingManager, tls: TlsMaterial, on_close):
-        self.ip, self.pairing, self.tls, self.on_close = ip, pairing, tls, on_close
+    def __init__(self, ip: str, pairing: PairingManager, on_close):
+        self.ip, self.pairing, self.on_close = ip, pairing, on_close
         self.root = tk.Tk()
         self.root.title("Mouse Phone")
         self.root.resizable(False, False)
@@ -25,7 +25,7 @@ class DesktopWindow:
         frame.pack()
         tk.Label(frame, text="Mouse Phone", font=("Segoe UI", 22, "bold"), fg="white", bg="#101828").pack()
         tk.Label(frame, text=f"Ordenador disponible: {ip}", font=("Segoe UI", 10), fg="#aebbd1", bg="#101828").pack(pady=(4, 16))
-        tk.Label(frame, text="● Conexión cifrada con TLS", font=("Segoe UI", 10, "bold"), fg="#84efb6", bg="#101828").pack(pady=(0, 10))
+        tk.Label(frame, text="● Cifrado de extremo a extremo", font=("Segoe UI", 10, "bold"), fg="#84efb6", bg="#101828").pack(pady=(0, 10))
         self.qr_label = tk.Label(frame, bg="white", padx=10, pady=10)
         self.qr_label.pack()
         tk.Label(frame, text="Código temporal", font=("Segoe UI", 10, "bold"), fg="#aebbd1", bg="#101828").pack(pady=(16, 2))
@@ -34,13 +34,11 @@ class DesktopWindow:
         self.timer_label = tk.Label(frame, font=("Segoe UI", 9), fg="#98a2b3", bg="#101828")
         self.timer_label.pack(pady=(4, 0))
         ttk.Button(frame, text="Generar un código nuevo", command=self.regenerate).pack(pady=(16, 0))
-        ttk.Button(frame, text="Abrir certificado para el móvil", command=self.open_certificate_folder).pack(pady=(8, 0))
-        tk.Label(frame, text=f"CA: {tls.ca_fingerprint[:23]}…", font=("Consolas", 8), fg="#98a2b3", bg="#101828").pack(pady=(10, 0))
         self.refresh()
 
     def payload(self) -> str:
         details = self.pairing.current()
-        return "mousephone://pair?" + urlencode({"ip": self.ip, "port": PORT, "code": details.code, "expires": int(details.expires_at), "tls": 1, "ca": self.tls.ca_fingerprint})
+        return "mousephone://pair?" + urlencode({"ip": self.ip, "port": PORT, "code": details.code, "expires": int(details.expires_at), "secret": base64.b64encode(details.qr_secret).decode()})
 
     def regenerate(self) -> None:
         self.pairing.renew()
@@ -61,8 +59,6 @@ class DesktopWindow:
         self.on_close()
         self.root.destroy()
 
-    def open_certificate_folder(self) -> None:
-        os.startfile(self.tls.ca_certificate.parent)
 
     def run(self) -> None:
         self.root.mainloop()

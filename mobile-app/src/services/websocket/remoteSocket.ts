@@ -1,7 +1,7 @@
 import { DESKTOP_PORT } from '../../config/constants';
 
 export function connectRemoteSocket(ip: string): WebSocket {
-  return new WebSocket(`wss://${ip}:${DESKTOP_PORT}`);
+  return new WebSocket(`ws://${ip}:${DESKTOP_PORT}`);
 }
 
 export function sendRemoteMessage(socket: WebSocket | null, message: object): void {
