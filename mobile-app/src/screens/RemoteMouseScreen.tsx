@@ -8,6 +8,7 @@ import { discoverComputers, discoveryAddresses } from '../services/network/disco
 import { loadComputers, saveComputers } from '../services/storage/computers';
 import { connectRemoteSocket, sendRemoteMessage } from '../services/websocket/remoteSocket';
 import { newKeyPair, SecureSession } from '../services/websocket/secureSession';
+import { deviceId, readCredential, saveCredential } from '../services/storage/deviceIdentity';
 import { MediaButton } from '../components/MediaButton';
 import type { SavedComputer } from '../features/computers/model';
 import { remoteCommands } from '../features/remote-control/commands';
@@ -58,7 +59,6 @@ function RemoteMouse() {
   }, []);
 
   const rememberComputer = (computer: SavedComputer) => {
-    if (ignored.current.has(computer.ip)) return;
     setComputers((current) => {
       const existing = current.find((item) => item.ip === computer.ip);
       const next = [existing || computer, ...current.filter((item) => item.ip !== computer.ip)];
@@ -83,26 +83,41 @@ function RemoteMouse() {
       } },
     ]);
 
-  const connect = (computer: SavedComputer, code: string) => {
+  const connect = async (computer: SavedComputer, code: string, forceCode = false) => {
+    const id = await deviceId();
+    const credential = !pairingSecret.current && !forceCode ? await readCredential(computer.ip) : null;
     socket.current?.close();
     setState("conectando");
     const ws = connectRemoteSocket(computer.ip);
     socket.current = ws;
-    ws.onopen = () => { if (socket.current === ws) { const keys = newKeyPair(); (ws as any).keys = keys; sendRemoteMessage(ws, { type: 'session_init', mode: pairingSecret.current ? 'qr' : 'code', public: keys.publicKey }); } };
+    ws.onopen = () => { if (socket.current === ws) { const keys = newKeyPair(); const mode = credential ? 'known' : (pairingSecret.current ? 'qr' : 'code'); (ws as any).keys = keys; (ws as any).mode = mode; sendRemoteMessage(ws, { type: 'session_init', mode, public: keys.publicKey, device_id: id, device_name: 'Mi móvil' }); } };
     ws.onmessage = (event) => {
       if (socket.current !== ws) return;
       try {
         const message = JSON.parse(String(event.data));
-        if (message.type === 'session_offer') { const session = new SecureSession((ws as any).keys.secretKey, message.public, pairingSecret.current); secureSession.current = session; if (!pairingSecret.current) { setPairingCode(''); setPairingError('Introduce el nuevo código de seis cifras que muestra ahora el ordenador.'); return; } sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: 'qr' })); }
-        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
+        if (message.type === 'pair_result' && message.ok === false && message.reason === 'authorization_required') {
+          // La autorización temporal ha caducado o fue revocada: ofrecer un emparejamiento nuevo.
+          secureSession.current = null;
+          pairingSecret.current = '';
+          setPairingComputer(computer);
+          setPairingCode('');
+          setPairingError('La autorización temporal de este móvil ha caducado. Introduce un código nuevo o escanea el QR del ordenador.');
+          setShowPairingSheet(true);
+          setState('desconectado');
+          ws.close();
+          return;
+        }
+        if (message.type === 'session_offer') { const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; if ((ws as any).mode === 'code') { setPairingCode(''); setPairingError('Introduce el nuevo código de seis cifras que muestra ahora el ordenador.'); return; } sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
+        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
       } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
     ws.onerror = () => { if (socket.current === ws) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
-    ws.onclose = () => { if (socket.current === ws) setState("desconectado"); };
+    ws.onclose = () => { if (socket.current === ws) { rememberComputer(computer); setState("desconectado"); setActiveComputer(null); } };
   };
 
-  const openPairing = (computer: SavedComputer) => {
+  const openPairing = async (computer: SavedComputer) => {
     pairingSecret.current = ''; secureSession.current = null;
+    if (await readCredential(computer.ip)) { setPairingComputer(computer); setPairingError(''); void connect(computer, ''); return; }
     setPairingComputer(computer); setPairingCode(''); setPairingError(''); setShowAddSheet(false); setShowPairingSheet(true);
   };
 
@@ -112,7 +127,13 @@ function RemoteMouse() {
       if (pairingCode.trim() !== secureSession.current.sas) { setPairingError('El código no coincide con el que muestra el ordenador.'); return; }
       sendRemoteMessage(socket.current, secureSession.current.encrypt({ type: 'confirm', mode: 'code', code: pairingCode.trim() })); return;
     }
-    setPairingError('Conectando… mira el código temporal que acaba de aparecer en el ordenador.'); connect(pairingComputer, pairingCode.trim());
+    if (pairingSecret.current) {
+      setPairingError('Conectando mediante el código QR…');
+      void connect(pairingComputer, pairingCode.trim());
+    } else {
+      setPairingError('Conectando… mira el código temporal que acaba de aparecer en el ordenador.');
+      void connect(pairingComputer, pairingCode.trim(), true);
+    }
   };
 
   const openScanner = async () => {
@@ -128,6 +149,7 @@ function RemoteMouse() {
       const url = new URL(data);
       const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const secret = url.searchParams.get('secret'); const expires = Number(url.searchParams.get('expires'));
       if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || !secret || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
+      ignored.current.delete(ip);
       pairingSecret.current = secret; setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
     } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };
@@ -160,7 +182,7 @@ function RemoteMouse() {
     const ip = host.trim().replace(/^ws:\/\//, "").replace(/:\d+$/, "").replace(/\/$/, "");
     if (!ip) return;
     ignored.current.delete(ip);
-    openPairing({ name: name.trim() || "Mi ordenador", ip });
+    void openPairing({ name: name.trim() || "Mi ordenador", ip });
     setName("");
     setHost("");
   };
@@ -207,7 +229,7 @@ function RemoteMouse() {
     keyboardShouldPersistTaps="handled"
   >
     <StatusBar style="light" />
-    <View style={styles.topRow}><TouchableOpacity onPress={() => { socket.current?.close(); setActiveComputer(null); }}><Text style={styles.back}>‹  Ordenadores</Text></TouchableOpacity><Text style={styles.connected}>● {state}</Text></View>
+    <View style={styles.topRow}><TouchableOpacity onPress={() => { rememberComputer(activeComputer); socket.current?.close(); setActiveComputer(null); }}><Text style={styles.back}>‹  Ordenadores</Text></TouchableOpacity><Text style={styles.connected}>● {state}</Text></View>
     <Text style={styles.title}>Panel táctil</Text><Text style={styles.subtitle}>{activeComputer.name} · {activeComputer.ip}</Text>
     <View style={[styles.controlRow, { minHeight: compact ? 140 : 200 }]}>
       <View {...trackpadResponder.panHandlers} style={styles.trackpad}><Text style={styles.trackpadIcon}>⌖</Text><Text style={styles.trackpadText}>Desliza para mover{`\n`}Toca para hacer clic</Text></View>

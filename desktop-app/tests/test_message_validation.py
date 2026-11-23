@@ -8,7 +8,7 @@ from mouse_phone.security.message_validation import MAX_DELTA, MessageValidation
 
 class MessageValidationTests(unittest.TestCase):
     def test_all_supported_control_messages_are_accepted(self):
-        for message in ({"type": "move", "dx": 1.5, "dy": -2}, {"type": "move_end"}, {"type": "click", "button": "left"}, {"type": "scroll", "amount": 20}, {"type": "media", "action": "play_pause"}):
+        for message in ({"type": "move", "dx": 1.5, "dy": -2}, {"type": "move_end"}, {"type": "click", "button": "left"}, {"type": "scroll", "amount": 20}, {"type": "media", "action": "play_pause"}, {"type": "confirm", "mode": "known"}):
             self.assertEqual(validate_message(message), message)
 
     def test_rejects_unknown_actions_invalid_types_and_unexpected_fields(self):

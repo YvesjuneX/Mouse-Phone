@@ -6,9 +6,19 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "plugins": [
-      ["expo-camera", { "cameraPermission": "Permite a Mouse Phone escanear el código QR del ordenador." }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Permite a Mouse Phone escanear el código QR del ordenador."
+        }
+      ],
+      "expo-secure-store"
     ],
-    "android": { "package": "com.example.remotemouse" },
-    "ios": { "bundleIdentifier": "com.example.remotemouse" }
+    "android": {
+      "package": "com.example.remotemouse"
+    },
+    "ios": {
+      "bundleIdentifier": "com.example.remotemouse"
+    }
   }
 }

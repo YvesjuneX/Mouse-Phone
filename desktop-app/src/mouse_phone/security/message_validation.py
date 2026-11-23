@@ -42,8 +42,8 @@ def validate_message(message: object) -> dict:
         _only(message, {"type", "action"})
         if message.get("action") not in MEDIA_ACTIONS: raise MessageValidationError("unsupported media action")
     elif message_type == "session_init":
-        _only(message, {"type", "mode", "public"})
-        if message.get("mode") not in {"qr", "code"} or not isinstance(message.get("public"), str) or not 40 <= len(message["public"]) <= 128: raise MessageValidationError("invalid session init")
+        _only(message, {"type", "mode", "public", "device_id", "device_name"})
+        if message.get("mode") not in {"qr", "code", "known"} or not isinstance(message.get("public"), str) or not 40 <= len(message["public"]) <= 128 or not isinstance(message.get("device_id"), str) or not 1 <= len(message["device_id"]) <= 128 or not isinstance(message.get("device_name"), str) or not 1 <= len(message["device_name"]) <= 64: raise MessageValidationError("invalid session init")
     elif message_type == "secure":
         _only(message, {"type", "counter", "nonce", "data"})
         counter = message.get("counter")
@@ -52,7 +52,7 @@ def validate_message(message: object) -> dict:
         if not isinstance(message.get("data"), str) or not 1 <= len(message["data"]) <= MAX_MESSAGE_BYTES: raise MessageValidationError("invalid encrypted data")
     elif message_type == "confirm":
         _only(message, {"type", "mode", "code"})
-        if message.get("mode") not in {"qr", "code"}: raise MessageValidationError("invalid confirmation")
+        if message.get("mode") not in {"qr", "code", "known"}: raise MessageValidationError("invalid confirmation")
         if message["mode"] == "code" and (not isinstance(message.get("code"), str) or len(message["code"]) != 6 or not message["code"].isdigit()): raise MessageValidationError("invalid code")
     else:
         raise MessageValidationError("unsupported message type")
