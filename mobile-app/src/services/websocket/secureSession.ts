@@ -10,6 +10,7 @@ import * as ExpoCrypto from 'expo-crypto';
 const info = utf8ToBytes('mouse-phone/session/v1');
 const b64 = (data: Uint8Array) => fromByteArray(data);
 const unb64 = (data: string) => toByteArray(data);
+export const sessionCodeSecret = (code: string) => b64(utf8ToBytes(code));
 
 export class SecureSession {
   private readonly key: Uint8Array; private sent = 0; private received = -1;

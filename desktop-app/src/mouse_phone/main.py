@@ -52,7 +52,8 @@ class ServerRuntime:
 
 async def main() -> None:
     """Compatibilidad para pruebas o arranque sin interfaz."""
-    pairing, registry, sessions = PairingManager(), DeviceRegistry(), ActiveSessions()
+    pairing, registry = PairingManager(), DeviceRegistry()
+    sessions = ActiveSessions(registry)
     stop_previous_server(PORT)
     async with websockets.serve(lambda ws: handle_client(ws, pairing, registry, sessions), "0.0.0.0", PORT, compression=None):
         await asyncio.Future()
@@ -60,7 +61,8 @@ async def main() -> None:
 
 def run() -> None:
     windows.pyautogui.PAUSE = 0; windows.pyautogui.MINIMUM_DURATION = 0
-    pairing, registry, sessions = PairingManager(), DeviceRegistry(), ActiveSessions()
+    pairing, registry = PairingManager(), DeviceRegistry()
+    sessions = ActiveSessions(registry)
     ip = local_ip()
     runtime = ServerRuntime(pairing, registry, sessions)
     try:

@@ -33,3 +33,9 @@ class DeviceRegistryTests(unittest.TestCase):
         self.registry.set_state("phone", "trusted")
         restarted = DeviceRegistry(self.registry.path)
         self.assertEqual(restarted.authorize("phone"), token)
+
+    def test_revoking_a_temporary_device_requires_new_pairing(self):
+        self.registry.register_temporary("phone", "Teléfono")
+        self.assertTrue(self.registry.revoke_temporary("phone"))
+        self.assertIsNone(self.registry.authorize("phone"))
+        self.assertFalse(self.registry.revoke_temporary("unknown"))

@@ -5,6 +5,7 @@ import socket
 import time
 
 import websockets
+from cryptography.exceptions import InvalidTag
 
 from mouse_phone.application.controller import RemoteController
 from mouse_phone.config.settings import ANIMATION_INTERVAL_SECONDS
@@ -41,19 +42,29 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None) -
                         private, public = new_keypair()
                         mode, device_id, device_name = message.get("mode"), message.get("device_id"), message.get("device_name")
                         known = registry.authorize(device_id) if registry and mode == "known" else None
-                        extra = known or (pairing.current().qr_secret if mode == "qr" else b"")
+                        details = pairing.current()
+                        extra = known or (details.qr_secret if mode == "qr" else details.code.encode() if mode == "code" else b"")
                         if mode == "known" and not known:
                             await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "authorization_required"})); continue
                         session = SecureSession(private, unb64(message["public"]), extra)
                         session_mode = mode
-                        if mode == "code": pairing.show_code(session.sas)
                         await websocket.send(json.dumps({"type": "session_offer", "public": public, "mode": mode}))
                         continue
                     if message.get("type") != "secure" or session is None:
                         await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "authentication_required"}))
                         continue
-                    confirmation = validate_message(session.decrypt(message))
-                    if confirmation.get("type") != "confirm" or (confirmation.get("mode") == "code" and confirmation.get("code") != session.sas): raise ValueError("invalid confirmation")
+                    try:
+                        confirmation = validate_message(session.decrypt(message))
+                    except (ValueError, InvalidTag):
+                        if session_mode == "code":
+                            await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "invalid_code"}))
+                            continue
+                        raise
+                    if confirmation.get("type") != "confirm" or (confirmation.get("mode") == "code" and not pairing.verify(confirmation.get("code"))):
+                        if session_mode == "code":
+                            await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "invalid_code"}))
+                            continue
+                        raise ValueError("invalid confirmation")
                     authenticated = True
                     token = registry.register_temporary(device_id, device_name) if registry and session_mode in {"qr", "code"} else None
                     if sessions: active_session = sessions.register(device_id, device_name, websocket, asyncio.get_running_loop())
@@ -61,7 +72,11 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None) -
                     continue
                 if session is not None:
                     if message.get("type") != "secure": raise ValueError("unencrypted command")
-                    message = validate_message(session.decrypt(message))
+                    try:
+                        message = validate_message(session.decrypt(message))
+                    except (ValueError, InvalidTag):
+                        await websocket.close(code=4002, reason="invalid secure message")
+                        break
                 if registry and device_id and registry.authorize(device_id) is None:
                     await websocket.close(code=4003, reason="authorization revoked")
                     break

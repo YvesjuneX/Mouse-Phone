@@ -5,7 +5,8 @@ import uuid
 
 
 class ActiveSessions:
-    def __init__(self):
+    def __init__(self, registry=None):
+        self.registry = registry
         self._lock = threading.Lock()
         self._sessions = {}
 
@@ -27,5 +28,7 @@ class ActiveSessions:
         with self._lock:
             item = self._sessions.pop(session_id, None)
         if not item: return False
-        item["loop"].call_soon_threadsafe(lambda: asyncio.create_task(item["websocket"].close(code=4000, reason="ended by computer")))
+        revoked = self.registry.revoke_temporary(item["device_id"]) if self.registry else False
+        reason = "temporary access ended" if revoked else "ended by computer"
+        item["loop"].call_soon_threadsafe(lambda: asyncio.create_task(item["websocket"].close(code=4000, reason=reason)))
         return True

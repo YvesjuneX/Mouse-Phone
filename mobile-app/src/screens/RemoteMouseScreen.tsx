@@ -7,7 +7,7 @@ import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets
 import { discoverComputers, discoveryAddresses } from '../services/network/discovery';
 import { loadComputers, saveComputers } from '../services/storage/computers';
 import { connectRemoteSocket, sendRemoteMessage } from '../services/websocket/remoteSocket';
-import { newKeyPair, SecureSession } from '../services/websocket/secureSession';
+import { newKeyPair, SecureSession, sessionCodeSecret } from '../services/websocket/secureSession';
 import { deviceId, readCredential, saveCredential } from '../services/storage/deviceIdentity';
 import { MediaButton } from '../components/MediaButton';
 import type { SavedComputer } from '../features/computers/model';
@@ -40,6 +40,7 @@ function RemoteMouse() {
   const [showPairingSheet, setShowPairingSheet] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [pairingCode, setPairingCode] = useState('');
+  const [codeReady, setCodeReady] = useState(false);
   const [pairingComputer, setPairingComputer] = useState<SavedComputer | null>(null);
   const [pairingError, setPairingError] = useState('');
   const pairingSecret = useRef('');
@@ -122,15 +123,17 @@ function RemoteMouse() {
           pairingSecret.current = '';
           setPairingComputer(computer);
           setPairingCode('');
+          setCodeReady(false);
           setPairingError('La autorización temporal de este móvil ha caducado. Introduce un código nuevo o escanea el QR del ordenador.');
           setShowPairingSheet(true);
           setState('desconectado');
           (ws as any).authorizationRejected = true;
-          ws.close();
+          void connect(computer, '', true);
           return;
         }
-        if (message.type === 'session_offer') { const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; if ((ws as any).mode === 'code') { setPairingCode(''); setPairingError('Introduce el nuevo código de seis cifras que muestra ahora el ordenador.'); return; } sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
-        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
+        if (message.type === 'pair_result' && message.ok === false && message.reason === 'invalid_code') { secureSession.current = null; setCodeReady(true); setPairingError('El código no es correcto. Corrige los dígitos necesarios e inténtalo de nuevo.'); return; }
+        if (message.type === 'session_offer') { if ((ws as any).mode === 'code') { (ws as any).offerPublic = message.public; setPairingCode(''); setCodeReady(true); setPairingError('Introduce el código de seis cifras que muestra ahora el ordenador.'); return; } const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
+        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); setCodeReady(false); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
       } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
     ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
@@ -181,23 +184,24 @@ function RemoteMouse() {
   };
 
   const openPairing = async (computer: SavedComputer) => {
-    pairingSecret.current = ''; secureSession.current = null;
+    pairingSecret.current = ''; secureSession.current = null; setCodeReady(false);
     if (await readCredential(computer.ip)) { setPairingComputer(computer); setPairingError(''); void connect(computer, ''); return; }
-    setPairingComputer(computer); setPairingCode(''); setPairingError(''); setShowAddSheet(false); setShowPairingSheet(true);
+    setPairingComputer(computer); setPairingCode(''); setPairingError('Preparando un código seguro en el ordenador…'); setShowAddSheet(false); setShowPairingSheet(true); void connect(computer, '', true);
   };
 
   const submitPairing = () => {
     if (!pairingComputer) return;
-    if (secureSession.current && !pairingSecret.current) {
-      if (pairingCode.trim() !== secureSession.current.sas) { setPairingError('El código no coincide con el que muestra el ordenador.'); return; }
-      sendRemoteMessage(socket.current, secureSession.current.encrypt({ type: 'confirm', mode: 'code', code: pairingCode.trim() })); return;
-    }
     if (pairingSecret.current) {
       setPairingError('Conectando mediante el código QR…');
       void connect(pairingComputer, pairingCode.trim());
+    } else if (codeReady && socket.current && (socket.current as any).offerPublic) {
+      const code = pairingCode.trim();
+      if (code.length !== 6) { setPairingError('Introduce los seis dígitos del código que muestra el ordenador.'); return; }
+      const session = new SecureSession((socket.current as any).keys.secretKey, (socket.current as any).offerPublic, sessionCodeSecret(code));
+      secureSession.current = session;
+      sendRemoteMessage(socket.current, session.encrypt({ type: 'confirm', mode: 'code', code })); return;
     } else {
-      setPairingError('Conectando… mira el código temporal que acaba de aparecer en el ordenador.');
-      void connect(pairingComputer, pairingCode.trim(), true);
+      setPairingError('La conexión segura se está preparando.');
     }
   };
 
@@ -215,7 +219,7 @@ function RemoteMouse() {
       const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const secret = url.searchParams.get('secret'); const expires = Number(url.searchParams.get('expires'));
       if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || !secret || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
       ignored.current.delete(ip);
-      pairingSecret.current = secret; setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
+      pairingSecret.current = secret; setCodeReady(true); setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
     } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };
 
@@ -323,7 +327,17 @@ function RemoteMouse() {
     </ScrollView>
     <TouchableOpacity style={styles.fab} onPress={() => setShowAddSheet(true)}><Text style={styles.fabText}>＋</Text></TouchableOpacity>
     <Modal transparent animationType="slide" visible={showAddSheet} onRequestClose={() => setShowAddSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Añadir ordenador</Text><TouchableOpacity onPress={() => setShowAddSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><TextInput value={name} onChangeText={setName} placeholder="Nombre (ej. Mi PC)" placeholderTextColor="#92a0b8" style={styles.input} /><TextInput value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numeric" placeholder="IP (ej. 192.168.1.25)" placeholderTextColor="#92a0b8" style={styles.input} /><TouchableOpacity style={styles.addButton} onPress={addComputer}><Text style={styles.connectText}>Continuar con código</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity></View></View></Modal>
-    <Modal transparent animationType="slide" visible={showPairingSheet} onRequestClose={() => setShowPairingSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Confirmar ordenador</Text><TouchableOpacity onPress={() => setShowPairingSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><Text style={styles.pairingInfo}>{pairingComputer?.name} · {pairingComputer?.ip}</Text><Text style={styles.pairingHelp}>Introduce el código de seis cifras que muestra Mouse Phone en el ordenador.</Text><TextInput value={pairingCode} onChangeText={(value) => setPairingCode(value.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" maxLength={6} placeholder="000000" placeholderTextColor="#92a0b8" style={[styles.input, styles.codeInput]} /><TouchableOpacity style={styles.addButton} onPress={submitPairing}><Text style={styles.connectText}>Conectar de forma segura</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity>{!!pairingError && <Text style={styles.error}>{pairingError}</Text>}</View></View></Modal>
+    <Modal transparent animationType="slide" visible={showPairingSheet} onRequestClose={() => setShowPairingSheet(false)}>
+      <View style={styles.sheetBackdrop}><View style={styles.sheet}>
+        <View style={styles.sheetHandle} />
+        <View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Confirmar ordenador</Text><TouchableOpacity onPress={() => setShowPairingSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View>
+        <Text style={styles.pairingInfo}>{pairingComputer?.name} · {pairingComputer?.ip}</Text>
+        {pairingSecret.current ? <Text style={styles.pairingHelp}>El QR ya contiene la autorización. Pulsa para conectar de forma segura.</Text> : codeReady ? <><Text style={styles.pairingHelp}>Introduce el nuevo código de seis cifras que muestra ahora el ordenador.</Text><TextInput value={pairingCode} onChangeText={(value) => setPairingCode(value.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" maxLength={6} placeholder="000000" placeholderTextColor="#92a0b8" style={[styles.input, styles.codeInput]} /></> : <Text style={styles.pairingHelp}>Preparando un código nuevo en el ordenador…</Text>}
+        <TouchableOpacity disabled={!pairingSecret.current && !codeReady} style={[styles.addButton, !pairingSecret.current && !codeReady && styles.disabledButton]} onPress={submitPairing}><Text style={styles.connectText}>{pairingSecret.current ? 'Conectar mediante QR' : codeReady ? 'Conectar de forma segura' : 'Esperando código…'}</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity>
+        {!!pairingError && <Text style={styles.error}>{pairingError}</Text>}
+      </View></View>
+    </Modal>
     <Modal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}><View style={styles.scanner}><CameraView style={styles.camera} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={handleQr} /><View style={styles.scannerOverlay}><Text style={styles.scannerTitle}>Escanea el QR del ordenador</Text><Text style={styles.scannerHint}>El código cambia automáticamente por seguridad.</Text><TouchableOpacity style={styles.scannerClose} onPress={() => setShowScanner(false)}><Text style={styles.connectText}>Cancelar</Text></TouchableOpacity></View></View></Modal>
   </View>;
 }
@@ -342,7 +356,7 @@ const styles = StyleSheet.create({
   searchButton: { marginTop: 12, borderRadius: 12, padding: 15, borderWidth: 1, borderColor: "#475467", alignItems: "center" }, searchText: { color: "#84caff", fontWeight: "700" }, error: { color: "#fda29b", marginTop: 10, textAlign: "center" },
   fab: { position: "absolute", right: 24, bottom: 76, width: 60, height: 60, borderRadius: 30, backgroundColor: "#1570ef", justifyContent: "center", alignItems: "center", elevation: 8 }, fabText: { color: "#fff", fontSize: 32, lineHeight: 36, fontWeight: "300" },
   tabs: { flexDirection: "row", justifyContent: "space-around", borderTopWidth: 1, borderTopColor: "#344054", paddingTop: 14 }, tab: { color: "#98a2b3", fontWeight: "600" }, tabActive: { color: "#84caff", fontWeight: "700" },
-  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,.55)", justifyContent: "flex-end" }, sheet: { backgroundColor: "#182230", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, paddingBottom: 36 }, sheetHandle: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: "#667085", marginBottom: 16 }, sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }, sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700" }, close: { color: "#98a2b3", fontSize: 30 }, input: { height: 50, marginBottom: 11, borderRadius: 10, backgroundColor: "#1d2939", color: "#fff", paddingHorizontal: 14 }, codeInput: { textAlign: 'center', fontSize: 26, letterSpacing: 8, fontWeight: '700' }, pairingInfo: { color: '#d5e2f1', fontWeight: '700', marginBottom: 6 }, pairingHelp: { color: '#98a2b3', lineHeight: 20, marginBottom: 16 }, qrAlternative: { alignItems: 'center', padding: 14, marginTop: 6 }, addButton: { alignItems: "center", padding: 16, borderRadius: 12, backgroundColor: "#1570ef" }, scanner: { flex: 1, backgroundColor: '#101828' }, camera: { flex: 1 }, scannerOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 26, backgroundColor: 'rgba(16,24,40,.94)' }, scannerTitle: { color: '#fff', fontSize: 21, fontWeight: '700' }, scannerHint: { color: '#b4c4d7', marginTop: 6 }, scannerClose: { marginTop: 18, alignItems: 'center', padding: 14, borderRadius: 12, backgroundColor: '#344054' },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,.55)", justifyContent: "flex-end" }, sheet: { backgroundColor: "#182230", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, paddingBottom: 36 }, sheetHandle: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: "#667085", marginBottom: 16 }, sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }, sheetTitle: { color: "#fff", fontSize: 20, fontWeight: "700" }, close: { color: "#98a2b3", fontSize: 30 }, input: { height: 50, marginBottom: 11, borderRadius: 10, backgroundColor: "#1d2939", color: "#fff", paddingHorizontal: 14 }, codeInput: { textAlign: 'center', fontSize: 26, letterSpacing: 8, fontWeight: '700' }, pairingInfo: { color: '#d5e2f1', fontWeight: '700', marginBottom: 6 }, pairingHelp: { color: '#98a2b3', lineHeight: 20, marginBottom: 16 }, qrAlternative: { alignItems: 'center', padding: 14, marginTop: 6 }, addButton: { alignItems: "center", padding: 16, borderRadius: 12, backgroundColor: "#1570ef" }, disabledButton: { backgroundColor: '#475467' }, scanner: { flex: 1, backgroundColor: '#101828' }, camera: { flex: 1 }, scannerOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 26, backgroundColor: 'rgba(16,24,40,.94)' }, scannerTitle: { color: '#fff', fontSize: 21, fontWeight: '700' }, scannerHint: { color: '#b4c4d7', marginTop: 6 }, scannerClose: { marginTop: 18, alignItems: 'center', padding: 14, borderRadius: 12, backgroundColor: '#344054' },
   controlRow: { flex: 1, flexDirection: "row", gap: 10, minHeight: 250 }, trackpad: { flex: 1, borderRadius: 20, borderWidth: 1, borderColor: "#475467", backgroundColor: "#182230", alignItems: "center", justifyContent: "center" }, trackpadIcon: { color: "#667085", fontSize: 44, marginBottom: 14 }, trackpadText: { color: "#cbd5e1", textAlign: "center", lineHeight: 22 }, wheel: { width: 52, borderRadius: 18, borderWidth: 1, borderColor: "#475467", backgroundColor: "#1d2939", justifyContent: "space-between", alignItems: "center", paddingVertical: 18 }, wheelGlyph: { color: "#84caff", fontSize: 24 }, wheelText: { color: "#98a2b3", fontSize: 9, fontWeight: "700", transform: [{ rotate: "-90deg" }] },
   mediaPanel: { paddingBottom: 8 }, sectionTitle: { color: "#eaecf0", fontWeight: "700", marginTop: 15, marginBottom: 10 }, mediaRow: { flexDirection: "row", gap: 10, marginBottom: 10 }, mediaButton: { flex: 1, height: 50, borderRadius: 12, backgroundColor: "#344054", alignItems: "center", justifyContent: "center" }, playButton: { backgroundColor: "#1570ef", flex: 1.3 }, mediaText: { color: "#fff", fontWeight: "700" },
 });

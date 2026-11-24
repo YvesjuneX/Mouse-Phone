@@ -43,5 +43,14 @@ class DeviceRegistry:
                 item["state"] = state
                 if state == "temporary": item["expires_at"] = self.clock() + self.temporary_minutes() * 60
                 self._save()
+
+    def revoke_temporary(self, device_id: str) -> bool:
+        """Invalida la autorización actual, pero conserva el móvil en su lista temporal."""
+        with self.lock:
+            item = self.data["devices"].get(device_id)
+            if not item or item.get("state") != "temporary": return False
+            item["expires_at"] = 0
+            self._save()
+            return True
     def list_devices(self):
         with self.lock: return [(key, value.copy()) for key, value in self.data["devices"].items()]
