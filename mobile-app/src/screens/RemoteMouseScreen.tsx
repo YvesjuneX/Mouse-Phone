@@ -14,6 +14,8 @@ import type { SavedComputer } from '../features/computers/model';
 import { remoteCommands } from '../features/remote-control/commands';
 
 type ConnectionState = "desconectado" | "conectando" | "conectado" | "error";
+const RECONNECT_DELAY_MS = 3_000;
+const MAX_RECONNECT_ATTEMPTS = 20;
 
 export default function RemoteMouseScreen() {
   return <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -43,6 +45,10 @@ function RemoteMouse() {
   const pairingSecret = useRef('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const socket = useRef<WebSocket | null>(null);
+  const connectedSocket = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempts = useRef(0);
+  const manualDisconnect = useRef(false);
   const lastPosition = useRef<{ x: number; y: number } | null>(null);
   const lastWheelY = useRef(0);
   const ignored = useRef(new Set<string>());
@@ -55,6 +61,8 @@ function RemoteMouse() {
   }, []);
 
   useEffect(() => () => {
+    manualDisconnect.current = true;
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     socket.current?.close();
   }, []);
 
@@ -83,12 +91,25 @@ function RemoteMouse() {
       } },
     ]);
 
-  const connect = async (computer: SavedComputer, code: string, forceCode = false) => {
+  const stopReconnect = () => {
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = null;
+    reconnectAttempts.current = 0;
+  };
+
+  const connect = async (computer: SavedComputer, code: string, forceCode = false, reconnecting = false) => {
+    if (!reconnecting) {
+      stopReconnect();
+      manualDisconnect.current = false;
+    }
     const id = await deviceId();
     const credential = !pairingSecret.current && !forceCode ? await readCredential(computer.ip) : null;
-    socket.current?.close();
+    const previousSocket = socket.current;
+    socket.current = null;
+    previousSocket?.close();
     setState("conectando");
     const ws = connectRemoteSocket(computer.ip);
+    (ws as any).reconnecting = reconnecting;
     socket.current = ws;
     ws.onopen = () => { if (socket.current === ws) { const keys = newKeyPair(); const mode = credential ? 'known' : (pairingSecret.current ? 'qr' : 'code'); (ws as any).keys = keys; (ws as any).mode = mode; sendRemoteMessage(ws, { type: 'session_init', mode, public: keys.publicKey, device_id: id, device_name: 'Mi móvil' }); } };
     ws.onmessage = (event) => {
@@ -104,15 +125,59 @@ function RemoteMouse() {
           setPairingError('La autorización temporal de este móvil ha caducado. Introduce un código nuevo o escanea el QR del ordenador.');
           setShowPairingSheet(true);
           setState('desconectado');
+          (ws as any).authorizationRejected = true;
           ws.close();
           return;
         }
         if (message.type === 'session_offer') { const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; if ((ws as any).mode === 'code') { setPairingCode(''); setPairingError('Introduce el nuevo código de seis cifras que muestra ahora el ordenador.'); return; } sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
-        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
+        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
       } catch { setPairingError('La respuesta del ordenador no es válida.'); }
     };
-    ws.onerror = () => { if (socket.current === ws) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
-    ws.onclose = () => { if (socket.current === ws) { rememberComputer(computer); setState("desconectado"); setActiveComputer(null); } };
+    ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
+    ws.onclose = (event) => {
+      if (socket.current !== ws) return;
+      const shouldRetry = (connectedSocket.current === ws || (ws as any).reconnecting)
+        && !manualDisconnect.current
+        && !(ws as any).authorizationRejected
+        && event.code !== 4000
+        && event.code !== 4003;
+      socket.current = null;
+      if (connectedSocket.current === ws) connectedSocket.current = null;
+      secureSession.current = null;
+      rememberComputer(computer);
+      if (shouldRetry) {
+        setState('conectando');
+        scheduleReconnect(computer);
+        return;
+      }
+      setState("desconectado");
+      setActiveComputer(null);
+    };
+  };
+
+  const scheduleReconnect = (computer: SavedComputer) => {
+    if (reconnectTimer.current || manualDisconnect.current) return;
+    if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
+      setState('error');
+      setActiveComputer(null);
+      return;
+    }
+    reconnectTimer.current = setTimeout(async () => {
+      reconnectTimer.current = null;
+      try {
+        const network = await Network.getNetworkStateAsync();
+        if (!network.isConnected) { scheduleReconnect(computer); return; }
+        if (!await readCredential(computer.ip)) {
+          setState('desconectado');
+          setActiveComputer(null);
+          return;
+        }
+        reconnectAttempts.current += 1;
+        void connect(computer, '', false, true);
+      } catch {
+        scheduleReconnect(computer);
+      }
+    }, RECONNECT_DELAY_MS);
   };
 
   const openPairing = async (computer: SavedComputer) => {
@@ -229,7 +294,7 @@ function RemoteMouse() {
     keyboardShouldPersistTaps="handled"
   >
     <StatusBar style="light" />
-    <View style={styles.topRow}><TouchableOpacity onPress={() => { rememberComputer(activeComputer); socket.current?.close(); setActiveComputer(null); }}><Text style={styles.back}>‹  Ordenadores</Text></TouchableOpacity><Text style={styles.connected}>● {state}</Text></View>
+    <View style={styles.topRow}><TouchableOpacity onPress={() => { manualDisconnect.current = true; stopReconnect(); rememberComputer(activeComputer); socket.current?.close(); setActiveComputer(null); }}><Text style={styles.back}>‹  Ordenadores</Text></TouchableOpacity><Text style={[styles.connected, state !== 'conectado' && styles.connecting]}>● {state}</Text></View>
     <Text style={styles.title}>Panel táctil</Text><Text style={styles.subtitle}>{activeComputer.name} · {activeComputer.ip}</Text>
     <View style={[styles.controlRow, { minHeight: compact ? 140 : 200 }]}>
       <View {...trackpadResponder.panHandlers} style={styles.trackpad}><Text style={styles.trackpadIcon}>⌖</Text><Text style={styles.trackpadText}>Desliza para mover{`\n`}Toca para hacer clic</Text></View>
@@ -272,7 +337,7 @@ const styles = StyleSheet.create({
   transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', marginVertical: 12 }, roundKey: { flex: 0, width: 50, height: 50, borderRadius: 25, backgroundColor: '#121c2a', borderWidth: 1, borderColor: '#455367' }, playKey: { flex: 0, width: 80, height: 80, borderRadius: 40, backgroundColor: '#337f69', borderWidth: 3, borderColor: '#73c7a7', elevation: 5 },
   seekRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }, seekKey: { flex: 0, width: 72, height: 40, borderRadius: 20, backgroundColor: '#172231', borderWidth: 1, borderColor: '#394b61' }, seekCaption: { color: '#7e91a9', fontSize: 9, letterSpacing: 3 },
   volumeRocker: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101925', borderRadius: 24, borderWidth: 1, borderColor: '#3b4b60' }, volumeKey: { backgroundColor: 'transparent', height: 42 }, volumeLabel: { color: '#a3b4c8', fontSize: 9, letterSpacing: 2 }, remoteHint: { color: '#8b9eb6', textAlign: 'center', fontSize: 10, marginTop: 10 },
-  container: { flex: 1, backgroundColor: "#101828", paddingHorizontal: 22, paddingTop: 12, paddingBottom: 16 }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, title: { color: "#fff", fontSize: 30, fontWeight: "700" }, subtitle: { color: "#aebbd1", fontSize: 14, marginTop: 6, marginBottom: 16 }, qrButton: { width: 54, height: 54, borderRadius: 14, borderWidth: 1, borderColor: '#4d6480', backgroundColor: '#182a3d', justifyContent: 'center', alignItems: 'center' }, qrButtonIcon: { fontSize: 20, color: '#84caff', lineHeight: 19 }, qrButtonText: { color: '#bcd3ee', fontSize: 9, fontWeight: '800', letterSpacing: 1 }, topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, back: { color: "#84caff", fontSize: 16, fontWeight: "700" }, connected: { color: "#32d583", fontWeight: "700" },
+  container: { flex: 1, backgroundColor: "#101828", paddingHorizontal: 22, paddingTop: 12, paddingBottom: 16 }, listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, title: { color: "#fff", fontSize: 30, fontWeight: "700" }, subtitle: { color: "#aebbd1", fontSize: 14, marginTop: 6, marginBottom: 16 }, qrButton: { width: 54, height: 54, borderRadius: 14, borderWidth: 1, borderColor: '#4d6480', backgroundColor: '#182a3d', justifyContent: 'center', alignItems: 'center' }, qrButtonIcon: { fontSize: 20, color: '#84caff', lineHeight: 19 }, qrButtonText: { color: '#bcd3ee', fontSize: 9, fontWeight: '800', letterSpacing: 1 }, topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, back: { color: "#84caff", fontSize: 16, fontWeight: "700" }, connected: { color: "#32d583", fontWeight: "700" }, connecting: { color: '#fdb022' },
   computerList: { flex: 1 }, listContent: { paddingBottom: 80 }, computer: { backgroundColor: "#1d2939", borderRadius: 13, padding: 16, marginBottom: 9, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, computerName: { color: "#fff", fontSize: 16, fontWeight: "700" }, computerIp: { color: "#98a2b3", marginTop: 4 }, connectText: { color: "#fff", fontWeight: "700" }, hint: { color: "#98a2b3", marginTop: 15 },
   searchButton: { marginTop: 12, borderRadius: 12, padding: 15, borderWidth: 1, borderColor: "#475467", alignItems: "center" }, searchText: { color: "#84caff", fontWeight: "700" }, error: { color: "#fda29b", marginTop: 10, textAlign: "center" },
   fab: { position: "absolute", right: 24, bottom: 76, width: 60, height: 60, borderRadius: 30, backgroundColor: "#1570ef", justifyContent: "center", alignItems: "center", elevation: 8 }, fabText: { color: "#fff", fontSize: 32, lineHeight: 36, fontWeight: "300" },
