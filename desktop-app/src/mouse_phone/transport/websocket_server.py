@@ -25,11 +25,23 @@ async def animate(motion: Motion) -> None:
         previous = now
 
 
-async def handle_client(websocket, pairing=None, registry=None, sessions=None) -> None:
+async def handle_client(websocket, pairing=None, registry=None, sessions=None, limiter=None) -> None:
     motion = Motion(read_cursor, write_cursor, screen_bounds())
     controller = RemoteController(motion)
     animation = asyncio.create_task(animate(motion))
     print(f"Móvil conectado: {websocket.remote_address}")
+    source = str(websocket.remote_address[0]) if isinstance(websocket.remote_address, tuple) else "unknown"
+
+    async def reject_code_attempt(device_id: str) -> bool:
+        result = limiter.record_failure(source, device_id) if limiter else None
+        if result and result.delay_seconds: await asyncio.sleep(result.delay_seconds)
+        locked = bool(result and result.locked)
+        response = {"type": "pair_result", "ok": False, "reason": "pairing_locked" if locked else "invalid_code"}
+        if result and not locked: response["attempts_remaining"] = result.remaining_attempts
+        await websocket.send(json.dumps(response))
+        if locked: await websocket.close(code=4008, reason="pairing temporarily locked")
+        return locked
+
     try:
         await websocket.send(json.dumps({"type": "remote_mouse", "version": 6, "name": socket.gethostname(), "pairing_required": pairing is not None, "encrypted": True}))
         authenticated, session, device_id, device_name, session_mode, active_session = pairing is None, None, None, None, None, None
@@ -41,6 +53,10 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None) -
                     if message.get("type") == "session_init":
                         private, public = new_keypair()
                         mode, device_id, device_name = message.get("mode"), message.get("device_id"), message.get("device_name")
+                        if mode == "code" and limiter and limiter.is_locked(source, device_id):
+                            await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "pairing_locked"}))
+                            await websocket.close(code=4008, reason="pairing temporarily locked")
+                            break
                         known = registry.authorize(device_id) if registry and mode == "known" else None
                         details = pairing.current()
                         extra = known or (details.qr_secret if mode == "qr" else details.code.encode() if mode == "code" else b"")
@@ -53,19 +69,24 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None) -
                     if message.get("type") != "secure" or session is None:
                         await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "authentication_required"}))
                         continue
+                    if session_mode == "code" and limiter and limiter.is_locked(source, device_id):
+                        await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "pairing_locked"}))
+                        await websocket.close(code=4008, reason="pairing temporarily locked")
+                        break
                     try:
                         confirmation = validate_message(session.decrypt(message))
                     except (ValueError, InvalidTag):
                         if session_mode == "code":
-                            await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "invalid_code"}))
+                            if await reject_code_attempt(device_id): break
                             continue
                         raise
                     if confirmation.get("type") != "confirm" or (confirmation.get("mode") == "code" and not pairing.verify(confirmation.get("code"))):
                         if session_mode == "code":
-                            await websocket.send(json.dumps({"type": "pair_result", "ok": False, "reason": "invalid_code"}))
+                            if await reject_code_attempt(device_id): break
                             continue
                         raise ValueError("invalid confirmation")
                     authenticated = True
+                    if session_mode == "code" and limiter: limiter.reset(source, device_id)
                     token = registry.register_temporary(device_id, device_name) if registry and session_mode in {"qr", "code"} else None
                     if sessions: active_session = sessions.register(device_id, device_name, websocket, asyncio.get_running_loop())
                     await websocket.send(json.dumps(session.encrypt({"type": "session_ready", "credential": b64(token) if token else None})))

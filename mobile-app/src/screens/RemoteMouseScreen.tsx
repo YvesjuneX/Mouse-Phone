@@ -41,6 +41,8 @@ function RemoteMouse() {
   const [showScanner, setShowScanner] = useState(false);
   const [pairingCode, setPairingCode] = useState('');
   const [codeReady, setCodeReady] = useState(false);
+  const [pairingLocked, setPairingLocked] = useState(false);
+  const [pairingSubmitting, setPairingSubmitting] = useState(false);
   const [pairingComputer, setPairingComputer] = useState<SavedComputer | null>(null);
   const [pairingError, setPairingError] = useState('');
   const pairingSecret = useRef('');
@@ -50,6 +52,7 @@ function RemoteMouse() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempts = useRef(0);
   const manualDisconnect = useRef(false);
+  const pairingSubmitInFlight = useRef(false);
   const lastPosition = useRef<{ x: number; y: number } | null>(null);
   const lastWheelY = useRef(0);
   const ignored = useRef(new Set<string>());
@@ -98,6 +101,11 @@ function RemoteMouse() {
     reconnectAttempts.current = 0;
   };
 
+  const finishPairingAttempt = () => {
+    pairingSubmitInFlight.current = false;
+    setPairingSubmitting(false);
+  };
+
   const connect = async (computer: SavedComputer, code: string, forceCode = false, reconnecting = false) => {
     if (!reconnecting) {
       stopReconnect();
@@ -124,6 +132,8 @@ function RemoteMouse() {
           setPairingComputer(computer);
           setPairingCode('');
           setCodeReady(false);
+          setPairingLocked(false);
+          finishPairingAttempt();
           setPairingError('La autorización temporal de este móvil ha caducado. Introduce un código nuevo o escanea el QR del ordenador.');
           setShowPairingSheet(true);
           setState('desconectado');
@@ -131,14 +141,16 @@ function RemoteMouse() {
           void connect(computer, '', true);
           return;
         }
-        if (message.type === 'pair_result' && message.ok === false && message.reason === 'invalid_code') { secureSession.current = null; setCodeReady(true); setPairingError('El código no es correcto. Corrige los dígitos necesarios e inténtalo de nuevo.'); return; }
-        if (message.type === 'session_offer') { if ((ws as any).mode === 'code') { (ws as any).offerPublic = message.public; setPairingCode(''); setCodeReady(true); setPairingError('Introduce el código de seis cifras que muestra ahora el ordenador.'); return; } const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
-        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); setCodeReady(false); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
-      } catch { setPairingError('La respuesta del ordenador no es válida.'); }
+        if (message.type === 'pair_result' && message.ok === false && message.reason === 'pairing_locked') { secureSession.current = null; setCodeReady(false); setPairingLocked(true); finishPairingAttempt(); setPairingError('El emparejamiento por código está temporalmente bloqueado. Espera unos minutos o escanea el código QR.'); setShowPairingSheet(true); return; }
+        if (message.type === 'pair_result' && message.ok === false && message.reason === 'invalid_code') { const remaining = Number.isInteger(message.attempts_remaining) ? message.attempts_remaining : null; secureSession.current = null; setCodeReady(true); finishPairingAttempt(); setPairingError(`El código no es correcto. Corrige los dígitos necesarios e inténtalo de nuevo.${remaining !== null ? ` Te quedan ${remaining} intento${remaining === 1 ? '' : 's'}.` : ''}`); return; }
+        if (message.type === 'session_offer') { if ((ws as any).mode === 'code') { (ws as any).offerPublic = message.public; setPairingCode(''); setPairingLocked(false); finishPairingAttempt(); setCodeReady(true); setPairingError('Introduce el código de seis cifras que muestra ahora el ordenador.'); return; } const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
+        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); finishPairingAttempt(); setCodeReady(false); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
+      } catch { finishPairingAttempt(); setPairingError('La respuesta del ordenador no es válida.'); }
     };
-    ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
+    ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { finishPairingAttempt(); setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
     ws.onclose = (event) => {
       if (socket.current !== ws) return;
+      finishPairingAttempt();
       const shouldRetry = (connectedSocket.current === ws || (ws as any).reconnecting)
         && !manualDisconnect.current
         && !(ws as any).authorizationRejected
@@ -184,19 +196,22 @@ function RemoteMouse() {
   };
 
   const openPairing = async (computer: SavedComputer) => {
-    pairingSecret.current = ''; secureSession.current = null; setCodeReady(false);
+    pairingSecret.current = ''; secureSession.current = null; finishPairingAttempt(); setCodeReady(false); setPairingLocked(false);
     if (await readCredential(computer.ip)) { setPairingComputer(computer); setPairingError(''); void connect(computer, ''); return; }
     setPairingComputer(computer); setPairingCode(''); setPairingError('Preparando un código seguro en el ordenador…'); setShowAddSheet(false); setShowPairingSheet(true); void connect(computer, '', true);
   };
 
   const submitPairing = () => {
     if (!pairingComputer) return;
+    if (pairingSubmitInFlight.current) return;
     if (pairingSecret.current) {
+      pairingSubmitInFlight.current = true; setPairingSubmitting(true);
       setPairingError('Conectando mediante el código QR…');
       void connect(pairingComputer, pairingCode.trim());
     } else if (codeReady && socket.current && (socket.current as any).offerPublic) {
       const code = pairingCode.trim();
       if (code.length !== 6) { setPairingError('Introduce los seis dígitos del código que muestra el ordenador.'); return; }
+      pairingSubmitInFlight.current = true; setPairingSubmitting(true);
       const session = new SecureSession((socket.current as any).keys.secretKey, (socket.current as any).offerPublic, sessionCodeSecret(code));
       secureSession.current = session;
       sendRemoteMessage(socket.current, session.encrypt({ type: 'confirm', mode: 'code', code })); return;
@@ -219,7 +234,7 @@ function RemoteMouse() {
       const ip = url.searchParams.get('ip'); const code = url.searchParams.get('code'); const secret = url.searchParams.get('secret'); const expires = Number(url.searchParams.get('expires'));
       if (url.protocol !== 'mousephone:' || url.hostname !== 'pair' || !ip || !code || !secret || code.length !== 6 || !Number.isFinite(expires) || expires * 1000 <= Date.now()) throw new Error();
       ignored.current.delete(ip);
-      pairingSecret.current = secret; setCodeReady(true); setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
+      pairingSecret.current = secret; setCodeReady(true); setPairingLocked(false); setShowScanner(false); setPairingComputer({ name: 'Ordenador escaneado', ip }); setPairingCode(code); setPairingError(''); setShowPairingSheet(true);
     } catch { setPairingError('Este código QR no es válido o ya ha caducado.'); }
   };
 
@@ -332,8 +347,8 @@ function RemoteMouse() {
         <View style={styles.sheetHandle} />
         <View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Confirmar ordenador</Text><TouchableOpacity onPress={() => setShowPairingSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View>
         <Text style={styles.pairingInfo}>{pairingComputer?.name} · {pairingComputer?.ip}</Text>
-        {pairingSecret.current ? <Text style={styles.pairingHelp}>El QR ya contiene la autorización. Pulsa para conectar de forma segura.</Text> : codeReady ? <><Text style={styles.pairingHelp}>Introduce el nuevo código de seis cifras que muestra ahora el ordenador.</Text><TextInput value={pairingCode} onChangeText={(value) => setPairingCode(value.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" maxLength={6} placeholder="000000" placeholderTextColor="#92a0b8" style={[styles.input, styles.codeInput]} /></> : <Text style={styles.pairingHelp}>Preparando un código nuevo en el ordenador…</Text>}
-        <TouchableOpacity disabled={!pairingSecret.current && !codeReady} style={[styles.addButton, !pairingSecret.current && !codeReady && styles.disabledButton]} onPress={submitPairing}><Text style={styles.connectText}>{pairingSecret.current ? 'Conectar mediante QR' : codeReady ? 'Conectar de forma segura' : 'Esperando código…'}</Text></TouchableOpacity>
+        {pairingSecret.current ? <Text style={styles.pairingHelp}>El QR ya contiene la autorización. Pulsa para conectar de forma segura.</Text> : pairingLocked ? <Text style={styles.pairingHelp}>El emparejamiento por código está temporalmente bloqueado. Puedes usar el QR o volver a intentarlo más tarde.</Text> : codeReady ? <><Text style={styles.pairingHelp}>Introduce el código de seis cifras que muestra ahora el ordenador.</Text><TextInput editable={!pairingSubmitting} value={pairingCode} onChangeText={(value) => setPairingCode(value.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" maxLength={6} placeholder="000000" placeholderTextColor="#92a0b8" style={[styles.input, styles.codeInput]} /></> : <Text style={styles.pairingHelp}>Preparando un código nuevo en el ordenador…</Text>}
+        <TouchableOpacity disabled={pairingSubmitting || pairingLocked || (!pairingSecret.current && !codeReady)} style={[styles.addButton, (pairingSubmitting || pairingLocked || (!pairingSecret.current && !codeReady)) && styles.disabledButton]} onPress={submitPairing}><Text style={styles.connectText}>{pairingSubmitting ? 'Comprobando código…' : pairingSecret.current ? 'Conectar mediante QR' : pairingLocked ? 'Emparejamiento bloqueado' : codeReady ? 'Conectar de forma segura' : 'Esperando código…'}</Text></TouchableOpacity>
         <TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity>
         {!!pairingError && <Text style={styles.error}>{pairingError}</Text>}
       </View></View>
