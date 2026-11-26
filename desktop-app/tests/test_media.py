@@ -5,8 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import server
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from mouse_phone.application import controller
+from mouse_phone.transport import websocket_server
 
 
 class Connection:
@@ -31,8 +32,8 @@ class Connection:
 class MediaTests(unittest.TestCase):
     def test_two_taps_send_two_complete_presses(self):
         for action, key in [('play_pause', 'playpause')]:
-            with self.subTest(action=action), patch.object(server.pyautogui, 'keyDown') as down, patch.object(server.pyautogui, 'keyUp') as up:
-                asyncio.run(server.handle_client(Connection(action)))
+            with self.subTest(action=action), patch.object(controller.pyautogui, 'keyDown') as down, patch.object(controller.pyautogui, 'keyUp') as up:
+                asyncio.run(websocket_server.handle_client(Connection(action)))
                 self.assertEqual(down.call_count, 2)
                 self.assertEqual(up.call_count, 2)
                 down.assert_called_with(key, _pause=False)

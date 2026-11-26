@@ -2,7 +2,6 @@
 from io import BytesIO
 import tkinter as tk
 from tkinter import ttk
-import os
 from urllib.parse import urlencode
 import base64
 
@@ -104,7 +103,8 @@ class DesktopWindow:
         try:
             self.registry.set_temporary_minutes(int(self.minutes.get()))
             self.minutes.set(str(self.registry.temporary_minutes()))
-        except ValueError: pass
+        except ValueError:
+            self.minutes.set(str(self.registry.temporary_minutes()))
 
     def refresh_sessions(self):
         self.render_sessions()
