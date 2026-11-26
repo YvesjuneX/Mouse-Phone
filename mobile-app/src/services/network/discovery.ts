@@ -1,5 +1,7 @@
 export type Computer = { name: string; ip: string };
 const DESKTOP_PORT = 8765;
+export const DISCOVERY_CONCURRENCY = 8;
+export const DISCOVERY_COOLDOWN_MS = 10_000;
 
 export function discoveryAddresses(ownIp: string, saved: string[]): string[] {
   const parts = ownIp.split('.');
@@ -46,7 +48,7 @@ export function probeComputer(ip: string, timeoutMs = 2500): Promise<Computer | 
 }
 
 export async function discoverComputers(addresses: string[], onFound: (computer: Computer) => void,
-  probe = probeComputer, concurrency = 8): Promise<number> {
+  probe = probeComputer, concurrency = DISCOVERY_CONCURRENCY): Promise<number> {
   const queue = [...new Set(addresses)];
   let next = 0;
   let found = 0;

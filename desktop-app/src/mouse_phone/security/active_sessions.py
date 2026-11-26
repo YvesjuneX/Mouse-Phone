@@ -10,9 +10,11 @@ class ActiveSessions:
         self._lock = threading.Lock()
         self._sessions = {}
 
-    def register(self, device_id: str, name: str, websocket, loop) -> str:
+    def register(self, device_id: str, name: str, websocket, loop, max_sessions: int | None = None) -> str | None:
         session_id = uuid.uuid4().hex
         with self._lock:
+            if max_sessions is not None and len(self._sessions) >= max_sessions:
+                return None
             self._sessions[session_id] = {"device_id": device_id, "name": name, "websocket": websocket, "loop": loop}
         return session_id
 

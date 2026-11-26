@@ -4,7 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Alert, Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { discoverComputers, discoveryAddresses } from '../services/network/discovery';
+import { DISCOVERY_COOLDOWN_MS, discoverComputers, discoveryAddresses } from '../services/network/discovery';
 import { loadComputers, saveComputers } from '../services/storage/computers';
 import { connectRemoteSocket, sendRemoteMessage } from '../services/websocket/remoteSocket';
 import { newKeyPair, SecureSession, sessionCodeSecret } from '../services/websocket/secureSession';
@@ -36,6 +36,7 @@ function RemoteMouse() {
   const [searching, setSearching] = useState(false);
   const [searchMessage, setSearchMessage] = useState('');
   const searchRunning = useRef(false);
+  const lastDiscoveryAt = useRef(0);
   const [showAddSheet, setShowAddSheet] = useState(false);
   const [showPairingSheet, setShowPairingSheet] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -240,6 +241,13 @@ function RemoteMouse() {
 
   const findComputer = async () => {
     if (searchRunning.current) return;
+    const now = Date.now();
+    if (now - lastDiscoveryAt.current < DISCOVERY_COOLDOWN_MS) {
+      const remainingSeconds = Math.ceil((DISCOVERY_COOLDOWN_MS - (now - lastDiscoveryAt.current)) / 1000);
+      setSearchMessage(`Espera ${remainingSeconds} s antes de iniciar otra búsqueda.`);
+      return;
+    }
+    lastDiscoveryAt.current = now;
     searchRunning.current = true;
     ignored.current.clear();
     setSearching(true);

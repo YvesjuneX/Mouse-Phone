@@ -8,12 +8,16 @@ import websockets
 from cryptography.exceptions import InvalidTag
 
 from mouse_phone.application.controller import RemoteController
-from mouse_phone.config.settings import ANIMATION_INTERVAL_SECONDS
+from mouse_phone.config.settings import (
+    ANIMATION_INTERVAL_SECONDS, MAX_ACTIVE_SESSIONS, MAX_MESSAGES_PER_SECOND,
+    PAIRING_TIMEOUT_SECONDS,
+)
 from mouse_phone.input.motion import Motion
 from mouse_phone.input.windows import read_cursor, screen_bounds, write_cursor
 from mouse_phone.input import windows
 from mouse_phone.security.session_crypto import SecureSession, new_keypair, unb64, b64
 from mouse_phone.security.message_validation import MAX_MESSAGE_BYTES, MessageValidationError, validate_message
+from mouse_phone.security.network_limits import MessageRateLimiter
 
 
 async def animate(motion: Motion) -> None:
@@ -25,12 +29,28 @@ async def animate(motion: Motion) -> None:
         previous = now
 
 
-async def handle_client(websocket, pairing=None, registry=None, sessions=None, limiter=None) -> None:
+async def handle_client(websocket, pairing=None, registry=None, sessions=None, limiter=None, connection_guard=None) -> None:
+    source = str(websocket.remote_address[0]) if isinstance(websocket.remote_address, tuple) else "unknown"
+    admitted = connection_guard.admit(source) if connection_guard else True
+    if not admitted:
+        print("Conexión rechazada por límite de red.")
+        await websocket.close(code=4008, reason="connection limit reached")
+        return
+
     motion = Motion(read_cursor, write_cursor, screen_bounds())
     controller = RemoteController(motion)
     animation = asyncio.create_task(animate(motion))
     print(f"Móvil conectado: {websocket.remote_address}")
-    source = str(websocket.remote_address[0]) if isinstance(websocket.remote_address, tuple) else "unknown"
+    message_limiter = MessageRateLimiter(MAX_MESSAGES_PER_SECOND)
+    authenticated, session, device_id, device_name, session_mode, active_session = pairing is None, None, None, None, None, None
+
+    async def close_incomplete_pairing() -> None:
+        await asyncio.sleep(PAIRING_TIMEOUT_SECONDS)
+        if not authenticated:
+            print("Emparejamiento incompleto cerrado por tiempo de espera.")
+            await websocket.close(code=4009, reason="pairing timeout")
+
+    pairing_timeout = asyncio.create_task(close_incomplete_pairing()) if pairing is not None else None
 
     async def reject_code_attempt(device_id: str) -> bool:
         result = limiter.record_failure(source, device_id) if limiter else None
@@ -44,9 +64,12 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None, l
 
     try:
         await websocket.send(json.dumps({"type": "remote_mouse", "version": 6, "name": socket.gethostname(), "pairing_required": pairing is not None, "encrypted": True}))
-        authenticated, session, device_id, device_name, session_mode, active_session = pairing is None, None, None, None, None, None
         async for raw_message in websocket:
             try:
+                if not message_limiter.allow():
+                    print("Conexión cerrada por exceso de mensajes.")
+                    await websocket.close(code=4008, reason="message rate limit")
+                    break
                 if not isinstance(raw_message, str) or len(raw_message.encode("utf-8")) > MAX_MESSAGE_BYTES: raise MessageValidationError("message too large")
                 message = validate_message(json.loads(raw_message))
                 if not authenticated:
@@ -86,9 +109,16 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None, l
                             continue
                         raise ValueError("invalid confirmation")
                     authenticated = True
+                    if pairing_timeout:
+                        pairing_timeout.cancel()
                     if session_mode == "code" and limiter: limiter.reset(source, device_id)
+                    if sessions:
+                        active_session = sessions.register(device_id, device_name, websocket, asyncio.get_running_loop(), MAX_ACTIVE_SESSIONS)
+                        if active_session is None:
+                            print("Conexión rechazada por límite de sesiones activas.")
+                            await websocket.close(code=4013, reason="active session limit reached")
+                            break
                     token = registry.register_temporary(device_id, device_name) if registry and session_mode in {"qr", "code"} else None
-                    if sessions: active_session = sessions.register(device_id, device_name, websocket, asyncio.get_running_loop())
                     await websocket.send(json.dumps(session.encrypt({"type": "session_ready", "credential": b64(token) if token else None})))
                     continue
                 if session is not None:
@@ -108,6 +138,10 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None, l
     except websockets.ConnectionClosed: pass
     finally:
         if sessions: sessions.unregister(active_session)
+        if pairing_timeout:
+            pairing_timeout.cancel()
+            await asyncio.gather(pairing_timeout, return_exceptions=True)
         animation.cancel()
         await asyncio.gather(animation, return_exceptions=True)
+        if connection_guard: connection_guard.release(source)
         print("Móvil desconectado")
