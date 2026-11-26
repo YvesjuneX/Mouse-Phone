@@ -1,14 +1,12 @@
 """Adaptador de Windows para cursor, clics, rueda y teclas multimedia."""
 import ctypes
-from ctypes import wintypes
-
-import pyautogui
+import ctypes.wintypes
 
 user32 = ctypes.windll.user32
 
 
 def read_cursor() -> tuple[int, int]:
-    point = wintypes.POINT()
+    point = ctypes.wintypes.POINT()
     if not user32.GetCursorPos(ctypes.byref(point)):
         raise OSError("GetCursorPos failed")
     return point.x, point.y

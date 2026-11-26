@@ -12,4 +12,4 @@ def restrict_to_current_user(path: Path) -> None:
     try:
         subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(F)", "/c", "/q"], check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError):
-        pass
+        return

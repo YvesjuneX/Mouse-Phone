@@ -1,6 +1,6 @@
 """Protección local de secretos con Windows DPAPI."""
 import ctypes
-from ctypes import wintypes
+import ctypes.wintypes
 import os
 
 
@@ -9,7 +9,7 @@ _ENTROPY = b"MousePhone/device-registry/v1"
 
 
 class DataBlob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+    _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
 
 
 def _blob(data: bytes) -> tuple[DataBlob, object]:
@@ -20,8 +20,8 @@ def _blob(data: bytes) -> tuple[DataBlob, object]:
 def _protect_api():
     if os.name != "nt": raise RuntimeError("Windows DPAPI solo está disponible en Windows")
     crypt32 = ctypes.windll.crypt32
-    crypt32.CryptProtectData.argtypes = [ctypes.POINTER(DataBlob), wintypes.LPCWSTR, ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(DataBlob)]
-    crypt32.CryptUnprotectData.argtypes = [ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(DataBlob)]
+    crypt32.CryptProtectData.argtypes = [ctypes.POINTER(DataBlob), ctypes.wintypes.LPCWSTR, ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.c_void_p, ctypes.wintypes.DWORD, ctypes.POINTER(DataBlob)]
+    crypt32.CryptUnprotectData.argtypes = [ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.POINTER(DataBlob), ctypes.c_void_p, ctypes.c_void_p, ctypes.wintypes.DWORD, ctypes.POINTER(DataBlob)]
     return crypt32, ctypes.windll.kernel32
 
 

@@ -5,6 +5,7 @@ import socket
 import time
 
 import websockets
+import pyautogui
 from cryptography.exceptions import InvalidTag
 
 from mouse_phone.application.controller import RemoteController
@@ -14,7 +15,6 @@ from mouse_phone.config.settings import (
 )
 from mouse_phone.input.motion import Motion
 from mouse_phone.input.windows import read_cursor, screen_bounds, write_cursor
-from mouse_phone.input import windows
 from mouse_phone.security.session_crypto import SecureSession, new_keypair, unb64, b64
 from mouse_phone.security.message_validation import MAX_MESSAGE_BYTES, MessageValidationError, validate_message
 from mouse_phone.security.network_limits import MessageRateLimiter
@@ -132,10 +132,11 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None, l
                     await websocket.close(code=4003, reason="authorization revoked")
                     break
                 await controller.execute(message)
-            except windows.pyautogui.FailSafeException:
+            except pyautogui.FailSafeException:
                 motion.reset(); print("Protección de esquina activa: aparta el cursor con el ratón físico.")
             except (MessageValidationError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error: print(f"Mensaje ignorado: {error}")
-    except websockets.ConnectionClosed: pass
+    except websockets.ConnectionClosed:
+        return
     finally:
         if sessions: sessions.unregister(active_session)
         if pairing_timeout:

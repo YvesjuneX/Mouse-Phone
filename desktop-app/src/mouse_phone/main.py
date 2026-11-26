@@ -2,13 +2,13 @@
 import asyncio
 import threading
 
+import pyautogui
 import websockets
 
 from mouse_phone.config.settings import (
     MAX_CONNECTIONS_PER_SOURCE, MAX_NEW_CONNECTIONS_PER_MINUTE,
     MAX_OPEN_CONNECTIONS, PORT,
 )
-from mouse_phone.input import windows
 from mouse_phone.security.pairing import PairingManager
 from mouse_phone.security.device_registry import DeviceRegistry
 from mouse_phone.security.active_sessions import ActiveSessions
@@ -51,7 +51,8 @@ class ServerRuntime:
     def start(self) -> None:
         threading.Thread(target=lambda: asyncio.run(self.serve()), daemon=True).start()
         self.ready.wait()
-        if self.error: raise self.error
+        if self.error:
+            raise RuntimeError("No se pudo iniciar el servidor de Mouse Phone") from self.error
 
     def stop(self) -> None:
         self.stop_requested.set()
@@ -68,7 +69,7 @@ async def main() -> None:
 
 
 def run() -> None:
-    windows.pyautogui.PAUSE = 0; windows.pyautogui.MINIMUM_DURATION = 0
+    pyautogui.PAUSE = 0; pyautogui.MINIMUM_DURATION = 0
     pairing, registry = PairingManager(), DeviceRegistry()
     sessions, limiter = ActiveSessions(registry), PairingRateLimiter()
     connection_guard = ConnectionGuard(MAX_OPEN_CONNECTIONS, MAX_CONNECTIONS_PER_SOURCE, MAX_NEW_CONNECTIONS_PER_MINUTE)
