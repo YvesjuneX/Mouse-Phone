@@ -10,12 +10,18 @@ class ActiveSessions:
         self._lock = threading.Lock()
         self._sessions = {}
 
-    def register(self, device_id: str, name: str, websocket, loop, max_sessions: int | None = None) -> str | None:
+    def register(self, device_id: str, name: str, websocket, loop, end_connection=None, max_sessions: int | None = None) -> str | None:
         session_id = uuid.uuid4().hex
         with self._lock:
             if max_sessions is not None and len(self._sessions) >= max_sessions:
                 return None
-            self._sessions[session_id] = {"device_id": device_id, "name": name, "websocket": websocket, "loop": loop}
+            self._sessions[session_id] = {
+                "device_id": device_id,
+                "name": name,
+                "websocket": websocket,
+                "loop": loop,
+                "end_connection": end_connection,
+            }
         return session_id
 
     def unregister(self, session_id: str | None) -> None:
@@ -32,5 +38,11 @@ class ActiveSessions:
         if not item: return False
         revoked = self.registry.revoke_temporary(item["device_id"]) if self.registry else False
         reason = "temporary access ended" if revoked else "ended by computer"
-        item["loop"].call_soon_threadsafe(lambda: asyncio.create_task(item["websocket"].close(code=4000, reason=reason)))
+        async def close_connection() -> None:
+            if item["end_connection"]:
+                await item["end_connection"](reason)
+            else:
+                await item["websocket"].close(code=4000, reason=reason)
+
+        item["loop"].call_soon_threadsafe(lambda: asyncio.create_task(close_connection()))
         return True

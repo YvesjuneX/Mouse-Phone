@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -43,3 +44,22 @@ class NetworkLimitsTests(unittest.TestCase):
         self.assertIsNone(sessions.register("two", "Phone two", object(), None, max_sessions=1))
         sessions.unregister(first)
         self.assertIsNotNone(sessions.register("two", "Phone two", object(), None, max_sessions=1))
+
+
+class ActiveSessionEndTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ending_a_session_uses_its_graceful_end_callback(self):
+        class CurrentLoop:
+            def call_soon_threadsafe(self, callback):
+                callback()
+
+        ended = []
+
+        async def end_connection(reason):
+            ended.append(reason)
+
+        sessions = ActiveSessions()
+        session_id = sessions.register("one", "Phone one", object(), CurrentLoop(), end_connection)
+
+        self.assertTrue(sessions.end(session_id))
+        await asyncio.sleep(0)
+        self.assertEqual(ended, ["ended by computer"])

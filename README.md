@@ -2,6 +2,8 @@
 
 **Mouse Phone** convierte un teléfono móvil en un mando remoto para un ordenador Windows dentro de la misma red Wi-Fi. El proyecto está pensado como una demostración de comunicación en tiempo real entre una aplicación móvil y un servicio de escritorio.
 
+La primera versión distribuible será la **v0.1.0**, con un APK para Android y un ejecutable para Windows publicados en GitHub Releases. Consulta [la guía de publicación](docs/releasing.md).
+
 ## Funcionamiento actual
 
 La aplicación del ordenador abre un servidor WebSocket local. La aplicación móvil busca ordenadores compatibles en la red Wi-Fi, permite guardar o añadir equipos por IP y establece una conexión con el ordenador seleccionado. Los movimientos y acciones del móvil se envían al servidor, que los traduce en acciones nativas de Windows.
@@ -38,3 +40,7 @@ La comunicación se realiza por WebSocket dentro de la red local. El servidor an
 Es un prototipo para redes Wi-Fi de confianza. La conexión de control cifra los comandos de extremo a extremo tras el emparejamiento QR o por código; no requiere instalar certificados. No debe exponerse a Internet ni usarse en redes públicas.
 
 La guía de instalación, ejecución y resolución de incidencias se mantiene de forma local en `despliege.md` y no se publica en el repositorio.
+
+## Licencia
+
+Mouse Phone se distribuye bajo la licencia [GNU GPL v3.0](LICENSE). Las versiones modificadas que se distribuyan deben conservar las mismas libertades y proporcionar su código fuente.

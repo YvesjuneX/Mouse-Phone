@@ -1,24 +1,54 @@
 {
   "expo": {
-    "name": "Remote Mouse",
-    "slug": "remote-mouse",
+    "name": "Mouse Phone",
+    "slug": "mouse-phone",
     "version": "0.1.0",
+    "description": "Controla un ordenador Windows desde tu móvil dentro de tu red local.",
+    "scheme": "mousephone",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Permite a Mouse Phone escanear el código QR del ordenador."
+          "cameraPermission": "Permite a Mouse Phone escanear el código QR del ordenador.",
+          "recordAudioAndroid": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "hidden": false,
+          "style": "light",
+          "enforceContrast": true
+        }
+      ]
     ],
     "android": {
-      "package": "com.example.remotemouse"
+      "package": "com.yvesjunex.mousephone",
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "ios": {
-      "bundleIdentifier": "com.example.remotemouse"
-    }
+      "bundleIdentifier": "com.yvesjunex.mousephone",
+      "buildNumber": "1"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2dc042eb-d97f-4348-b8d6-5450e658266e"
+      }
+    },
+    "owner": "juanleal"
   }
 }

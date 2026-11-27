@@ -1,9 +1,9 @@
 import { StatusBar } from "expo-status-bar";
 import * as Network from "expo-network";
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Alert, Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
+import { Alert, KeyboardAvoidingView, Modal, PanResponder, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { useEffect, useRef, useState } from "react";
-import { SafeAreaProvider, SafeAreaView, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DISCOVERY_COOLDOWN_MS, discoverComputers, discoveryAddresses } from '../services/network/discovery';
 import { loadComputers, saveComputers } from '../services/storage/computers';
 import { connectRemoteSocket, sendRemoteMessage } from '../services/websocket/remoteSocket';
@@ -19,7 +19,7 @@ const MAX_RECONNECT_ATTEMPTS = 20;
 
 export default function RemoteMouseScreen() {
   return <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-    <SafeAreaView style={styles.safeRoot}><RemoteMouse /></SafeAreaView>
+    <RemoteMouse />
   </SafeAreaProvider>;
 }
 
@@ -27,6 +27,14 @@ function RemoteMouse() {
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
   const compact = window.height - insets.top - insets.bottom < 700;
+  // Los insets vienen del sistema Android: funcionan con navegación por gestos
+  // y con la barra clásica de tres botones, sin asumir su altura.
+  const screenInsets = {
+    paddingTop: Math.max(12, insets.top + 12),
+    paddingBottom: Math.max(16, insets.bottom + 16),
+  };
+  const sheetInsets = { paddingBottom: Math.max(36, insets.bottom + 20) };
+  const scannerInsets = { paddingBottom: Math.max(26, insets.bottom + 16) };
   const [host, setHost] = useState("");
   const [name, setName] = useState("");
   const [computers, setComputers] = useState<SavedComputer[]>([]);
@@ -145,10 +153,25 @@ function RemoteMouse() {
         if (message.type === 'pair_result' && message.ok === false && message.reason === 'pairing_locked') { secureSession.current = null; setCodeReady(false); setPairingLocked(true); finishPairingAttempt(); setPairingError('El emparejamiento por código está temporalmente bloqueado. Espera unos minutos o escanea el código QR.'); setShowPairingSheet(true); return; }
         if (message.type === 'pair_result' && message.ok === false && message.reason === 'invalid_code') { const remaining = Number.isInteger(message.attempts_remaining) ? message.attempts_remaining : null; secureSession.current = null; setCodeReady(true); finishPairingAttempt(); setPairingError(`El código no es correcto. Corrige los dígitos necesarios e inténtalo de nuevo.${remaining !== null ? ` Te quedan ${remaining} intento${remaining === 1 ? '' : 's'}.` : ''}`); return; }
         if (message.type === 'session_offer') { if ((ws as any).mode === 'code') { (ws as any).offerPublic = message.public; setPairingCode(''); setPairingLocked(false); finishPairingAttempt(); setCodeReady(true); setPairingError('Introduce el código de seis cifras que muestra ahora el ordenador.'); return; } const extra = credential || pairingSecret.current; const session = new SecureSession((ws as any).keys.secretKey, message.public, extra); secureSession.current = session; sendRemoteMessage(ws, session.encrypt({ type: 'confirm', mode: (ws as any).mode })); }
-        if (message.type === 'secure') { const payload = secureSession.current?.decrypt(message); if (payload?.type === 'session_ready') { if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.')); finishPairingAttempt(); setCodeReady(false); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado'); } }
+        if (message.type === 'secure') {
+          const payload = secureSession.current?.decrypt(message);
+          if (payload?.type === 'session_ready') {
+            if (payload.credential) void saveCredential(computer.ip, payload.credential).catch(() => setPairingError('No se pudo guardar la autorización de este ordenador.'));
+            finishPairingAttempt(); setCodeReady(false); connectedSocket.current = ws; reconnectAttempts.current = 0; rememberComputer(computer); setActiveComputer(computer); setShowPairingSheet(false); setState('conectado');
+          }
+          if (payload?.type === 'session_ended') {
+            manualDisconnect.current = true;
+            stopReconnect();
+            socket.current = null;
+            connectedSocket.current = null;
+            secureSession.current = null;
+            setState('desconectado');
+            setActiveComputer(null);
+          }
+        }
       } catch { finishPairingAttempt(); setPairingError('La respuesta del ordenador no es válida.'); }
     };
-    ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { finishPairingAttempt(); setPairingError('No se pudo establecer la conexión segura. Instala y confía en el certificado de la CA del ordenador.'); setState("error"); } };
+    ws.onerror = () => { if (socket.current === ws && !(ws as any).reconnecting) { finishPairingAttempt(); setPairingError('No se pudo conectar con el ordenador en la red local. Comprueba que ambos dispositivos usan la misma Wi-Fi y que el servidor está iniciado.'); setState("error"); } };
     ws.onclose = (event) => {
       if (socket.current !== ws) return;
       finishPairingAttempt();
@@ -316,7 +339,7 @@ function RemoteMouse() {
 
   if (activeComputer) return <ScrollView
     style={styles.safeRoot}
-    contentContainerStyle={[styles.container, styles.controlContent]}
+    contentContainerStyle={[styles.container, styles.controlContent, screenInsets]}
     contentInsetAdjustmentBehavior="never"
     keyboardShouldPersistTaps="handled"
   >
@@ -339,19 +362,19 @@ function RemoteMouse() {
     </View>
   </ScrollView>;
 
-  return <View style={styles.container}>
+  return <View style={[styles.container, screenInsets]}>
     <StatusBar style="light" /><View style={styles.listHeader}><View><Text style={styles.title}>Ordenadores</Text><Text style={styles.subtitle}>Elige un ordenador para empezar</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="Añadir ordenador mediante código QR" style={styles.qrButton} onPress={openScanner}><Text style={styles.qrButtonIcon}>▣</Text><Text style={styles.qrButtonText}>QR</Text></TouchableOpacity></View>
-    <ScrollView style={styles.computerList} contentContainerStyle={styles.listContent}>
+    <ScrollView style={styles.computerList} contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(96, insets.bottom + 86) }]}>
       {computers.map((computer) => <TouchableOpacity key={computer.ip} style={styles.computer} onPress={() => openPairing(computer)} onLongPress={() => deleteComputer(computer)} delayLongPress={500}><View><Text style={styles.computerName}>{computer.name}</Text><Text style={styles.computerIp}>{computer.ip}</Text></View><Text style={styles.connectText}>Conectar  ›</Text></TouchableOpacity>)}
       {!computers.length && <Text style={styles.hint}>{searching ? "Buscando ordenadores en esta Wi‑Fi…" : "Aún no hay ordenadores guardados."}</Text>}
       <TouchableOpacity style={styles.searchButton} onPress={findComputer} disabled={searching}><Text style={styles.searchText}>{searching ? "Buscando…" : "⌕  Buscar ordenadores en esta Wi‑Fi"}</Text></TouchableOpacity>
       {!!searchMessage && <Text style={styles.hint}>{searchMessage}</Text>}
       {state === "error" && <Text style={styles.error}>No se pudo conectar con el ordenador seleccionado.</Text>}
     </ScrollView>
-    <TouchableOpacity style={styles.fab} onPress={() => setShowAddSheet(true)}><Text style={styles.fabText}>＋</Text></TouchableOpacity>
-    <Modal transparent animationType="slide" visible={showAddSheet} onRequestClose={() => setShowAddSheet(false)}><View style={styles.sheetBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Añadir ordenador</Text><TouchableOpacity onPress={() => setShowAddSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><TextInput value={name} onChangeText={setName} placeholder="Nombre (ej. Mi PC)" placeholderTextColor="#92a0b8" style={styles.input} /><TextInput value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numeric" placeholder="IP (ej. 192.168.1.25)" placeholderTextColor="#92a0b8" style={styles.input} /><TouchableOpacity style={styles.addButton} onPress={addComputer}><Text style={styles.connectText}>Continuar con código</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity></View></View></Modal>
+    <TouchableOpacity style={[styles.fab, { bottom: Math.max(24, insets.bottom + 16) }]} onPress={() => setShowAddSheet(true)}><Text style={styles.fabText}>＋</Text></TouchableOpacity>
+    <Modal transparent animationType="slide" visible={showAddSheet} onRequestClose={() => setShowAddSheet(false)}><KeyboardAvoidingView style={styles.sheetBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><View style={[styles.sheet, sheetInsets]}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Añadir ordenador</Text><TouchableOpacity onPress={() => setShowAddSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View><TextInput value={name} onChangeText={setName} placeholder="Nombre (ej. Mi PC)" placeholderTextColor="#92a0b8" style={styles.input} /><TextInput value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="numeric" placeholder="IP (ej. 192.168.1.25)" placeholderTextColor="#92a0b8" style={styles.input} /><TouchableOpacity style={styles.addButton} onPress={addComputer}><Text style={styles.connectText}>Continuar con código</Text></TouchableOpacity><TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity></View></KeyboardAvoidingView></Modal>
     <Modal transparent animationType="slide" visible={showPairingSheet} onRequestClose={() => setShowPairingSheet(false)}>
-      <View style={styles.sheetBackdrop}><View style={styles.sheet}>
+      <KeyboardAvoidingView style={styles.sheetBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><View style={[styles.sheet, sheetInsets]}>
         <View style={styles.sheetHandle} />
         <View style={styles.sheetHeader}><Text style={styles.sheetTitle}>Confirmar ordenador</Text><TouchableOpacity onPress={() => setShowPairingSheet(false)}><Text style={styles.close}>×</Text></TouchableOpacity></View>
         <Text style={styles.pairingInfo}>{pairingComputer?.name} · {pairingComputer?.ip}</Text>
@@ -359,9 +382,9 @@ function RemoteMouse() {
         <TouchableOpacity disabled={pairingSubmitting || pairingLocked || (!pairingSecret.current && !codeReady)} style={[styles.addButton, (pairingSubmitting || pairingLocked || (!pairingSecret.current && !codeReady)) && styles.disabledButton]} onPress={submitPairing}><Text style={styles.connectText}>{pairingSubmitting ? 'Comprobando código…' : pairingSecret.current ? 'Conectar mediante QR' : pairingLocked ? 'Emparejamiento bloqueado' : codeReady ? 'Conectar de forma segura' : 'Esperando código…'}</Text></TouchableOpacity>
         <TouchableOpacity style={styles.qrAlternative} onPress={openScanner}><Text style={styles.searchText}>▣  Escanear código QR</Text></TouchableOpacity>
         {!!pairingError && <Text style={styles.error}>{pairingError}</Text>}
-      </View></View>
+      </View></KeyboardAvoidingView>
     </Modal>
-    <Modal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}><View style={styles.scanner}><CameraView style={styles.camera} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={handleQr} /><View style={styles.scannerOverlay}><Text style={styles.scannerTitle}>Escanea el QR del ordenador</Text><Text style={styles.scannerHint}>El código cambia automáticamente por seguridad.</Text><TouchableOpacity style={styles.scannerClose} onPress={() => setShowScanner(false)}><Text style={styles.connectText}>Cancelar</Text></TouchableOpacity></View></View></Modal>
+    <Modal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}><View style={styles.scanner}><CameraView style={styles.camera} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={handleQr} /><View style={[styles.scannerOverlay, scannerInsets]}><Text style={styles.scannerTitle}>Escanea el QR del ordenador</Text><Text style={styles.scannerHint}>El código cambia automáticamente por seguridad.</Text><TouchableOpacity style={styles.scannerClose} onPress={() => setShowScanner(false)}><Text style={styles.connectText}>Cancelar</Text></TouchableOpacity></View></View></Modal>
   </View>;
 }
 

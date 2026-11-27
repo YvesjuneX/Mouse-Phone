@@ -3,6 +3,8 @@ node_modules/
 .expo/
 dist/
 web-build/
+build/
+release-artifacts/
 
 # Python environments and caches
 __pycache__/

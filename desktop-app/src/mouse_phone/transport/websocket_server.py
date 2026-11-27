@@ -112,8 +112,22 @@ async def handle_client(websocket, pairing=None, registry=None, sessions=None, l
                     if pairing_timeout:
                         pairing_timeout.cancel()
                     if session_mode == "code" and limiter: limiter.reset(source, device_id)
+
+                    async def end_active_session(reason: str) -> None:
+                        # El aviso cifrado permite que el móvil actualice su interfaz antes
+                        # de completar el cierre normal del WebSocket.
+                        await websocket.send(json.dumps(session.encrypt({"type": "session_ended"})))
+                        await websocket.close(code=4000, reason=reason)
+
                     if sessions:
-                        active_session = sessions.register(device_id, device_name, websocket, asyncio.get_running_loop(), MAX_ACTIVE_SESSIONS)
+                        active_session = sessions.register(
+                            device_id,
+                            device_name,
+                            websocket,
+                            asyncio.get_running_loop(),
+                            end_active_session,
+                            MAX_ACTIVE_SESSIONS,
+                        )
                         if active_session is None:
                             print("Conexión rechazada por límite de sesiones activas.")
                             await websocket.close(code=4013, reason="active session limit reached")
